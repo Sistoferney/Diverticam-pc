@@ -138,18 +138,15 @@ class TemplateEditorWindow(QMainWindow):
         # Botones bajo el canvas
         canvas_buttons = QHBoxLayout()
 
-        self.btn_add_frame = QPushButton("Añadir Marco")
-        self.btn_add_frame.setIcon(self.style().standardIcon(self.style().SP_FileDialogNewFolder))
+        self.btn_add_frame = QPushButton("+ Añadir Marco")
         self.btn_add_frame.clicked.connect(self.add_frame)
         canvas_buttons.addWidget(self.btn_add_frame)
 
-        self.btn_clear = QPushButton("Limpiar Todo")
-        self.btn_clear.setIcon(self.style().standardIcon(self.style().SP_TrashIcon))
+        self.btn_clear = QPushButton("🗑 Limpiar Todo")
         self.btn_clear.clicked.connect(self.clear_canvas)
         canvas_buttons.addWidget(self.btn_clear)
 
-        self.btn_save = QPushButton("Guardar Plantilla")
-        self.btn_save.setIcon(self.style().standardIcon(self.style().SP_DialogSaveButton))
+        self.btn_save = QPushButton("💾 Guardar Plantilla")
         self.btn_save.clicked.connect(self.save_template)
         self.btn_save.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
         canvas_buttons.addWidget(self.btn_save)
@@ -312,8 +309,7 @@ class TemplateEditorWindow(QMainWindow):
         props_layout.addWidget(info)
 
         # Botón eliminar
-        self.btn_delete_frame = QPushButton("Eliminar Marco")
-        self.btn_delete_frame.setIcon(self.style().standardIcon(self.style().SP_TrashIcon))
+        self.btn_delete_frame = QPushButton("🗑 Eliminar Marco")
         self.btn_delete_frame.clicked.connect(self.delete_selected_frame)
         props_layout.addWidget(self.btn_delete_frame)
 
