@@ -13,8 +13,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [1/4] Creando entorno virtual...
-python -m venv venv
+echo [1/4] Creando entorno virtual (venv_desktop)...
+if exist venv_desktop (
+    echo El entorno virtual ya existe. Eliminando el anterior...
+    rmdir /s /q venv_desktop
+)
+python -m venv venv_desktop
 if errorlevel 1 (
     echo ERROR: No se pudo crear el entorno virtual
     pause
@@ -22,7 +26,7 @@ if errorlevel 1 (
 )
 
 echo [2/4] Activando entorno virtual...
-call venv\Scripts\activate.bat
+call venv_desktop\Scripts\activate.bat
 
 echo [3/4] Instalando dependencias...
 pip install --upgrade pip
@@ -38,8 +42,10 @@ echo [4/4] Instalacion completada!
 echo.
 echo ========================================
 echo Para ejecutar la aplicacion:
-echo   1. Activar entorno: venv\Scripts\activate
-echo   2. Ejecutar: python main.py
+echo   Opcion 1: Ejecutar run.bat
+echo   Opcion 2: Manual
+echo     1. Activar entorno: venv_desktop\Scripts\activate
+echo     2. Ejecutar: python main.py
 echo ========================================
 echo.
 pause

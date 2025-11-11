@@ -18,32 +18,49 @@ Sistema de gestión de eventos y photobooth profesional desarrollado con PySide6
 
 ## Instalación
 
-### 1. Crear entorno virtual
+### Opción A: Instalación automática (Windows)
 
 ```bash
 cd divertycam_desktop
-python -m venv venv
+install.bat
 ```
 
-### 2. Activar entorno virtual
+### Opción B: Instalación manual
+
+#### 1. Crear entorno virtual
+
+```bash
+cd divertycam_desktop
+python -m venv venv_desktop
+```
+
+#### 2. Activar entorno virtual
 
 **Windows:**
 ```bash
-venv\Scripts\activate
+venv_desktop\Scripts\activate
 ```
 
 **Linux/Mac:**
 ```bash
-source venv/bin/activate
+source venv_desktop/bin/activate
 ```
 
-### 3. Instalar dependencias
+#### 3. Instalar dependencias
 
 ```bash
 pip install -r requirements_desktop.txt
 ```
 
 ## Ejecutar la aplicación
+
+### Opción A: Script de ejecución (Windows)
+
+```bash
+run.bat
+```
+
+### Opción B: Manual
 
 ```bash
 python main.py

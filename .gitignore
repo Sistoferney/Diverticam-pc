@@ -7,6 +7,7 @@
 .Python
 env/
 venv/
+venv_desktop/
 ENV/
 .venv
 
@@ -30,3 +31,8 @@ Thumbs.db
 
 # Environment variables
 .env
+
+# DivertyCam Desktop
+divertycam_desktop/data/
+divertycam_desktop/media/
+divertycam_desktop/logs/

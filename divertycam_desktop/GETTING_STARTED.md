@@ -8,14 +8,14 @@ Guía rápida para empezar a usar DivertyCam Desktop.
 
 ```bash
 cd divertycam_desktop
-python -m venv venv
+python -m venv venv_desktop
 ```
 
 ### 2. Activar entorno virtual
 
 **Windows:**
 ```bash
-venv\Scripts\activate
+venv_desktop\Scripts\activate
 ```
 
 ### 3. Instalar dependencias
