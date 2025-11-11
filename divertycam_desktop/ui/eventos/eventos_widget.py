@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt
 
 from database import get_session, Evento
 from .evento_dialog import EventoDialog
+from ..photobooth import PhotoboothWindow
 
 logger = logging.getLogger(__name__)
 
@@ -221,14 +222,46 @@ class EventosWidget(QWidget):
         """Inicia el photobooth para el evento seleccionado"""
         selected_rows = self.tabla.selectedIndexes()
         if not selected_rows:
+            QMessageBox.warning(self, "Aviso", "Por favor seleccione un evento")
             return
 
         row = selected_rows[0].row()
+        evento_id = int(self.tabla.item(row, 0).text())
         evento_nombre = self.tabla.item(row, 1).text()
 
-        # TODO: Implementar ventana de photobooth
-        QMessageBox.information(
-            self,
-            "Photobooth",
-            f"Iniciando photobooth para evento: {evento_nombre}\n\n(En desarrollo)"
-        )
+        try:
+            # Verificar que el evento tenga configuración de photobooth
+            with get_session() as session:
+                evento = session.query(Evento).filter(Evento.id == evento_id).first()
+
+                if not evento:
+                    QMessageBox.warning(self, "Error", "Evento no encontrado")
+                    return
+
+                if not evento.photobooth_config:
+                    reply = QMessageBox.question(
+                        self,
+                        "Configuración requerida",
+                        f"El evento '{evento_nombre}' no tiene configuración de photobooth.\n\n"
+                        "¿Desea crear una configuración básica ahora?",
+                        QMessageBox.Yes | QMessageBox.No
+                    )
+
+                    if reply == QMessageBox.Yes:
+                        from database.models import PhotoboothConfig
+                        config = PhotoboothConfig(evento_id=evento_id)
+                        session.add(config)
+                        session.commit()
+                        logger.info(f"Configuración de photobooth creada para evento {evento_id}")
+                    else:
+                        return
+
+            # Abrir ventana de photobooth
+            self.photobooth_window = PhotoboothWindow(evento_id, self)
+            self.photobooth_window.show()
+
+            logger.info(f"Photobooth iniciado para evento: {evento_nombre}")
+
+        except Exception as e:
+            logger.error(f"Error iniciando photobooth: {e}")
+            QMessageBox.critical(self, "Error", f"Error iniciando photobooth:\n{str(e)}")

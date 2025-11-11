@@ -117,12 +117,17 @@ class MainWindow(QMainWindow):
 
     def iniciar_photobooth(self):
         """Inicia el photobooth"""
-        # TODO: Implementar ventana de photobooth
-        QMessageBox.information(
-            self,
-            "Photobooth",
-            "Función de photobooth en desarrollo"
-        )
+        # Obtener evento seleccionado de la tab de eventos
+        if self.tabs.currentIndex() != 1:  # No estamos en la tab de eventos
+            QMessageBox.warning(
+                self,
+                "Aviso",
+                "Por favor seleccione un evento primero"
+            )
+            return
+
+        # Delegar a eventos_widget
+        self.eventos_widget.iniciar_photobooth()
 
     def mostrar_acerca_de(self):
         """Muestra el diálogo 'Acerca de'"""
