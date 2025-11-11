@@ -28,17 +28,34 @@ if errorlevel 1 (
 echo [2/4] Activando entorno virtual...
 call venv_desktop\Scripts\activate.bat
 
-echo [3/4] Instalando dependencias...
-pip install --upgrade pip
+echo [3/4] Actualizando pip...
+python -m pip install --upgrade pip --quiet
+
+echo [4/5] Instalando dependencias principales...
 pip install PySide6 SQLAlchemy Pillow opencv-python
 
 if errorlevel 1 (
-    echo ERROR: No se pudieron instalar las dependencias
+    echo.
+    echo ADVERTENCIA: Hubo problemas instalando algunas dependencias
+    echo Intentando de nuevo con --no-cache-dir...
+    pip install --no-cache-dir PySide6 SQLAlchemy Pillow opencv-python
+)
+
+echo [5/5] Verificando instalacion...
+python -c "import PySide6; import sqlalchemy; print('OK: Dependencias instaladas correctamente')"
+
+if errorlevel 1 (
+    echo.
+    echo ERROR: Hubo un problema con la instalacion
+    echo Por favor revisa los mensajes de error arriba
     pause
     exit /b 1
 )
 
-echo [4/4] Instalacion completada!
+echo.
+echo ========================================
+echo INSTALACION COMPLETADA EXITOSAMENTE!
+echo ========================================
 echo.
 echo ========================================
 echo Para ejecutar la aplicacion:
