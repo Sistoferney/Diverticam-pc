@@ -1,0 +1,28 @@
+# DivertyCam Desktop - Dependencias
+# PySide6 - Framework de interfaz gráfica (LGPL - comercial friendly)
+PySide6>=6.6.0
+
+# Base de datos
+SQLAlchemy>=2.0.0
+alembic>=1.13.0  # Migraciones de base de datos
+
+# Imágenes y procesamiento
+Pillow>=10.0.0
+opencv-python>=4.8.0
+
+# Cámaras USB y PTP
+PyUSB>=1.2.1
+gphoto2>=2.5.0  # Para cámaras DSLR
+
+# Comunicación USB/ADB (WhatsApp)
+adb-shell>=0.4.0
+
+# Utilidades
+python-dotenv>=1.0.0
+pywin32>=305  # Para impresión en Windows
+
+# Reportes y PDF (opcional)
+reportlab>=4.0.0
+
+# Validación de datos
+pydantic>=2.0.0
