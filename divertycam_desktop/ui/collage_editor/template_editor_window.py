@@ -33,7 +33,8 @@ class TemplateEditorWindow(QMainWindow):
 
         self.evento_id = evento_id
         self.template_id = template_id
-        self.evento: Optional[Evento] = None
+        self.evento_nombre = ""
+        self.cliente_nombre = ""
 
         # Cargar información del evento
         if not self.load_evento():
@@ -55,8 +56,18 @@ class TemplateEditorWindow(QMainWindow):
         """Carga información del evento"""
         try:
             with get_session() as session:
-                self.evento = session.query(Evento).filter(Evento.id == self.evento_id).first()
-                return self.evento is not None
+                from sqlalchemy.orm import joinedload
+
+                evento = session.query(Evento).options(
+                    joinedload(Evento.cliente)
+                ).filter(Evento.id == self.evento_id).first()
+
+                if evento:
+                    self.evento_nombre = evento.nombre
+                    self.cliente_nombre = evento.cliente.nombre_completo if evento.cliente else "Sin cliente"
+                    return True
+
+                return False
         except Exception as e:
             logger.error(f"Error cargando evento: {e}")
             return False
@@ -85,7 +96,7 @@ class TemplateEditorWindow(QMainWindow):
 
     def init_ui(self):
         """Inicializa la interfaz de usuario"""
-        self.setWindowTitle(f"Editor de Plantillas - {self.evento.nombre}")
+        self.setWindowTitle(f"Editor de Plantillas - {self.evento_nombre}")
         self.setMinimumSize(1200, 800)
 
         # Widget central
@@ -100,7 +111,7 @@ class TemplateEditorWindow(QMainWindow):
         canvas_layout = QVBoxLayout()
 
         # Título
-        title_label = QLabel(f"Editor de Plantillas - {self.evento.nombre}")
+        title_label = QLabel(f"Editor de Plantillas - {self.evento_nombre}")
         title_font = QFont()
         title_font.setPointSize(16)
         title_font.setBold(True)
@@ -108,7 +119,7 @@ class TemplateEditorWindow(QMainWindow):
         canvas_layout.addWidget(title_label)
 
         # Info del evento
-        info_label = QLabel(f"Cliente: {self.evento.cliente.nombre_completo}")
+        info_label = QLabel(f"Cliente: {self.cliente_nombre}")
         canvas_layout.addWidget(info_label)
 
         # Instrucciones
