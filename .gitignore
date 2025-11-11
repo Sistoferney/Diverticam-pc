@@ -1,21 +1,28 @@
-.env
-/__pycache__/
+# Python
+__pycache__/
 *.pyc
 *.py[cod]
 *$py.class
 *.so
+*.egg-info/
 .Python
+
+# Virtual environments
 env/
 venv/
 venv_desktop/
+test_venv/
 ENV/
 .venv
 
-
-# Django
+# Logs
 *.log
-local_settings.py
+
+# Database
 db.sqlite3
+*.db
+
+# Media files
 media/
 staticfiles/
 
@@ -28,11 +35,20 @@ staticfiles/
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # Environment variables
 .env
+.env.local
 
-# DivertyCam Desktop
+# DivertyCam Desktop - Application data
 divertycam_desktop/data/
 divertycam_desktop/media/
 divertycam_desktop/logs/
+divertycam_desktop/*.db
+divertycam_desktop/*.sqlite3
+
+# Build artifacts
+dist/
+build/
+*.spec
