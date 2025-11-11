@@ -12,7 +12,7 @@ from PySide6.QtCore import Qt
 from database import get_session, Evento
 from .evento_dialog import EventoDialog
 from ..photobooth import PhotoboothWindow
-from ..collage_editor import TemplateEditorWindow
+from ..collage_editor import TemplateListWindow
 
 logger = logging.getLogger(__name__)
 
@@ -278,7 +278,7 @@ class EventosWidget(QWidget):
             QMessageBox.critical(self, "Error", f"Error iniciando photobooth:\n{str(e)}")
 
     def abrir_editor_plantillas(self):
-        """Abre el editor de plantillas para el evento seleccionado"""
+        """Abre la lista de plantillas para el evento seleccionado"""
         selected_rows = self.tabla.selectedIndexes()
         if not selected_rows:
             QMessageBox.warning(self, "Aviso", "Por favor seleccione un evento")
@@ -289,12 +289,12 @@ class EventosWidget(QWidget):
         evento_nombre = self.tabla.item(row, 1).text()
 
         try:
-            # Abrir editor de plantillas
-            self.editor_window = TemplateEditorWindow(evento_id, parent=self)
-            self.editor_window.show()
+            # Abrir lista de plantillas
+            self.templates_window = TemplateListWindow(evento_id, parent=self)
+            self.templates_window.show()
 
-            logger.info(f"Editor de plantillas abierto para evento: {evento_nombre}")
+            logger.info(f"Lista de plantillas abierta para evento: {evento_nombre}")
 
         except Exception as e:
-            logger.error(f"Error abriendo editor: {e}")
-            QMessageBox.critical(self, "Error", f"Error abriendo editor:\n{str(e)}")
+            logger.error(f"Error abriendo lista de plantillas: {e}")
+            QMessageBox.critical(self, "Error", f"Error abriendo lista de plantillas:\n{str(e)}")
