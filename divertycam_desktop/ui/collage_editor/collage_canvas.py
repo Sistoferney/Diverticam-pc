@@ -1,7 +1,7 @@
 """
 Canvas interactivo para editar plantillas de collage
 """
-from PySide6.QtWidgets import QGraphicsScene, QGraphicsView
+from PySide6.QtWidgets import QGraphicsScene, QGraphicsView, QGraphicsPixmapItem
 from PySide6.QtCore import Qt, QRectF, Signal
 from PySide6.QtGui import QColor, QPen, QBrush, QPainter, QPixmap, QImage
 from PIL import Image
@@ -40,7 +40,7 @@ class CollageCanvas(QGraphicsScene):
 
         # Estilo del canvas
         self.background_color = QColor(255, 255, 255)
-        self.background_image = None
+        self.background_image_item = None  # Item gráfico para la imagen de fondo
         self.overlay_image = None
         self.overlay_opacity = 1.0
 
@@ -115,26 +115,65 @@ class CollageCanvas(QGraphicsScene):
         self.setBackgroundBrush(QBrush(color))
 
     def set_background_image(self, image_path: str):
-        """Establece una imagen de fondo"""
+        """Establece una imagen de fondo que cubre todo el canvas manteniendo proporciones"""
         try:
+            # Remover imagen de fondo anterior si existe
+            if self.background_image_item:
+                self.removeItem(self.background_image_item)
+                self.background_image_item = None
+
+            # Cargar nuevo pixmap
             pixmap = QPixmap(image_path)
-            if not pixmap.isNull():
-                self.background_image = pixmap
-                # Crear un brush con la imagen
-                brush = QBrush(pixmap.scaled(
-                    int(self.width()),
-                    int(self.height()),
-                    Qt.KeepAspectRatioByExpanding,
-                    Qt.SmoothTransformation
-                ))
-                self.setBackgroundBrush(brush)
+            if pixmap.isNull():
+                print(f"No se pudo cargar la imagen: {image_path}")
+                return
+
+            # Crear item gráfico
+            self.background_image_item = QGraphicsPixmapItem(pixmap)
+
+            # Calcular escala para cubrir todo el canvas manteniendo aspect ratio
+            canvas_rect = self.sceneRect()
+            canvas_width = canvas_rect.width()
+            canvas_height = canvas_rect.height()
+
+            pixmap_width = pixmap.width()
+            pixmap_height = pixmap.height()
+
+            # Calcular escalas
+            scale_x = canvas_width / pixmap_width
+            scale_y = canvas_height / pixmap_height
+
+            # Usar la escala mayor para cubrir todo (cover mode)
+            scale = max(scale_x, scale_y)
+
+            # Aplicar escala
+            self.background_image_item.setScale(scale)
+
+            # Calcular posición para centrar
+            scaled_width = pixmap_width * scale
+            scaled_height = pixmap_height * scale
+
+            x_offset = (canvas_width - scaled_width) / 2
+            y_offset = (canvas_height - scaled_height) / 2
+
+            self.background_image_item.setPos(x_offset, y_offset)
+
+            # Colocar en el fondo (z-value bajo)
+            self.background_image_item.setZValue(-1000)
+
+            # Agregar a la escena
+            self.addItem(self.background_image_item)
+
         except Exception as e:
             print(f"Error cargando imagen de fondo: {e}")
+            import traceback
+            traceback.print_exc()
 
     def remove_background_image(self):
         """Elimina la imagen de fondo"""
-        self.background_image = None
-        self.setBackgroundBrush(QBrush(self.background_color))
+        if self.background_image_item:
+            self.removeItem(self.background_image_item)
+            self.background_image_item = None
 
     def get_template_data(self) -> dict:
         """Retorna los datos de la plantilla actual"""
