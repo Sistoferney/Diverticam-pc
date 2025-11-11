@@ -1,0 +1,1626 @@
+{# templates/photobooth/session.html #}
+{% extends 'layout/layout.html' %}
+{% load static %}
+{% block title %}Photobooth - {{ evento.nombre }}{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{% static 'photoboot/css/session.css' %}">
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="photobooth-container">
+    <!-- Pantalla de bienvenida espectacular -->
+    <div id="welcome-screen" class="welcome-screen" style="background-image: url('{{ config.imagen_fondo.url }}');">
+        <!-- Capa de desenfoque y partículas -->
+        <div class="welcome-overlay"></div>
+        <div class="particles-container">
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+        </div>
+        <div class="welcome-content">
+            
+            <div class="welcome-message animate__animated animate__fadeInUp">
+                <h1 style="color: {{ config.color_texto }}; font-size: {{ config.tamano_texto }}px;">
+                    {{ config.mensaje_bienvenida }}
+                </h1>
+                <p class="welcome-subtitle">¡Captura tu mejor momento y llévate un recuerdo inolvidable!</p>
+            </div>
+            <button id="start-camera-btn" class="btn btn-primary btn-lg btn-photobooth welcome-btn animate__animated animate__pulse animate__infinite">
+                <i class="fas fa-camera"></i> Iniciar Cámara
+            </button>
+        </div>
+    </div>
+    
+    <!-- Pantalla de cámara -->
+    <div id="camera-screen" class="camera-screen">
+        <div class="camera-preview">
+            <video id="video-preview" autoplay playsinline></video>
+        </div>
+        
+        <div class="session-progress">
+            <div id="progress-indicator" class="progress-indicator">
+                <!-- Indicadores de progreso se añadirán dinámicamente -->
+            </div>
+        </div>
+        
+        <div class="camera-controls">
+            <div class="d-flex flex-column align-items-center">
+                <!-- Botón principal para iniciar sesión (más grande y llamativo) -->
+                <button id="start-session-btn" class="btn btn-danger btn-lg btn-photobooth mb-3">
+                    <i class="fas fa-camera fa-lg me-2"></i> ¡TOMAR FOTOS!
+                </button>
+                
+                <!-- Texto explicativo -->
+                <p class="text-white text-center mb-2">
+                    Se tomarán {{ template.frames|length }} fotos con {{ config.tiempo_entre_fotos }} segundos entre cada una
+                </p>
+                
+                <!-- Contador de fotos para visualización -->
+                <div class="photo-counter bg-dark bg-opacity-75 px-3 py-2 rounded text-white mt-2">
+                    <span id="photos-taken">0</span> / <span id="total-photos">{{ template.frames|length }}</span> fotos
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Overlay de cuenta regresiva -->
+    <div id="countdown-overlay" class="countdown-overlay">
+        <div class="countdown-container">
+            <div id="countdown-display" class="countdown-display">3</div>
+            <div class="countdown-text"></div>
+        </div>
+    </div>
+    
+    <!-- Overlay de previsualización de foto -->
+    <div id="photo-preview-overlay" class="photo-preview-overlay">
+        <div class="photo-preview-container">
+            <img id="photo-preview-image" class="photo-preview-image" src="" alt="Vista previa de foto">
+        </div>
+    </div>
+    
+    <!-- Pantalla de resultado final -->
+    <div id="result-screen" class="result-screen">
+        <h2 class="mb-4">¡Tu recuerdo está listo!</h2>
+        
+        <div id="collage-result" class="collage-result">
+            <!-- El resultado del collage se mostrará aquí -->
+        </div>
+        
+        
+        <div class="d-flex gap-3 flex-wrap justify-content-center">
+            <button id="restart-btn" class="btn btn-primary btn-lg btn-photobooth">
+                <i class="fas fa-redo"></i> Nueva Sesión
+            </button>
+            
+            <button id="share-whatsapp-btn" class="btn btn-success btn-lg btn-photobooth">
+                <i class="fab fa-whatsapp"></i> Compartir por WhatsApp
+            </button>
+            
+            <button id="print-btn" type="button" class="btn btn-info btn-lg btn-photobooth">
+            <i class="fas fa-print"></i> Imprimir
+            </button>
+            
+            {% if return_url %}
+            <a href="{{ return_url }}" class="btn btn-secondary btn-lg btn-photobooth">
+                <i class="fas fa-arrow-left"></i> Volver
+            </a>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+ 
+
+
+    // Script actualizado para session.html
+const photosTakenElement = document.getElementById('photos-taken');
+const totalPhotosElement = document.getElementById('total-photos');
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Elementos DOM
+    const welcomeScreen = document.getElementById('welcome-screen');
+    const cameraScreen = document.getElementById('camera-screen');
+    const videoPreview = document.getElementById('video-preview');
+    const countdownOverlay = document.getElementById('countdown-overlay');
+    const countdownDisplay = document.getElementById('countdown-display');
+    const photoPreviewOverlay = document.getElementById('photo-preview-overlay');
+    const photoPreviewImage = document.getElementById('photo-preview-image');
+    const resultScreen = document.getElementById('result-screen');
+    const collageResult = document.getElementById('collage-result');
+    const progressIndicator = document.getElementById('progress-indicator');
+    
+    // Botones
+    const startCameraBtn = document.getElementById('start-camera-btn');
+    const startSessionBtn = document.getElementById('start-session-btn');
+    const restartBtn = document.getElementById('restart-btn');
+    
+    const printBtn = document.getElementById('print-btn');
+
+    
+    // Variables de estado
+    let mediaStream = null;
+    let templateData = {{ template_json|safe }};
+    let photosTaken = 0;
+    let isSessionActive = false;
+    let frameElements = [];
+    let framePhotos = [];
+    let currentPhotoIndex = 0;
+    
+    window.session_id = '{{ session_id }}';
+
+    // Configuración del Photobooth desde el modelo
+    const config = {
+        countdownSeconds: {{ config.tiempo_cuenta_regresiva|default:3 }}, // Tiempo de cuenta regresiva
+        timeBetweenPhotos: {{ config.tiempo_entre_fotos|default:3 }}, // Tiempo entre fotos
+        photoPreviewTime: {{ config.tiempo_visualizacion_foto|default:2 }}, // Tiempo de visualización de cada foto
+        cameraId: "{{ config.camera_id|default:'' }}",
+        cameraResolution: "{{ config.resolucion_camara|default:'1280x720' }}",
+        whiteBalance: "{{ config.balance_blancos|default:'auto' }}",
+        isoValue: {{ config.iso_valor|default:100 }},
+        printerName: "{{ config.printer_name|default:'' }}",
+        paperSize: "{{ config.paper_size|default:'10x15' }}",
+        printCopies: {{ config.copias_impresion|default:1 }},
+        printQuality: "{{ config.calidad_impresion|default:'high' }}",
+        autoPrint: {{ config.imprimir_automaticamente|yesno:"true,false" }}
+    };
+    
+    // Inicializar indicadores de progreso
+    function setupProgressIndicators() {
+        progressIndicator.innerHTML = '';
+        
+        if (!templateData.frames || !Array.isArray(templateData.frames)) {
+            console.error('No se encontraron marcos válidos en la plantilla');
+            return;
+        }
+        
+        for (let i = 0; i < templateData.frames.length; i++) {
+            const step = document.createElement('div');
+            step.className = 'progress-step';
+            progressIndicator.appendChild(step);
+        }
+        
+        updateProgressIndicators();
+    }
+    
+    // Actualizar indicadores de progreso
+    function updateProgressIndicators() {
+        const steps = progressIndicator.querySelectorAll('.progress-step');
+        
+        steps.forEach((step, index) => {
+            if (index < photosTaken) {
+                step.classList.add('completed');
+                step.classList.remove('active');
+            } else if (index === currentPhotoIndex) {
+                step.classList.add('active');
+                step.classList.remove('completed');
+            } else {
+                step.classList.remove('active', 'completed');
+            }
+        });
+    }
+    
+    // Inicializar cámara con la configuración establecida
+    async function initCamera() {
+        try {       
+            // Obtener dimensiones de resolución
+            let width = 1280, height = 720; // Valores predeterminados
+            
+            if (config.cameraResolution) {   
+                const [w, h] = config.cameraResolution.split('x').map(num => parseInt(num, 10));
+                width = w || width;         
+                height = h || height;
+            }
+            
+            // Configuraciones para la cámara
+            const videoConfig = {       
+                video: {
+                    width: { ideal: width },
+                    height: { ideal: height }
+                },
+                audio: false
+            };
+            
+            // Si hay una cámara específica configurada, usarla
+            if (config.cameraId) {         
+                videoConfig.video.deviceId = { exact: config.cameraId }; 
+            }
+            
+            // Detener cualquier stream actual
+            if (mediaStream) {          
+                mediaStream.getTracks().forEach(track => track.stop());
+            }
+            
+            // Intentar obtener acceso a la cámara especificada
+            try {                   
+                mediaStream = await navigator.mediaDevices.getUserMedia(videoConfig);
+                videoPreview.srcObject = mediaStream;
+                
+                // Intentar aplicar configuraciones avanzadas si están disponibles
+                const videoTrack = mediaStream.getVideoTracks()[0];
+                if (videoTrack && videoTrack.getCapabilities && videoTrack.applyConstraints) {  
+                    const capabilities = videoTrack.getCapabilities();
+                    
+                    // Construir restricciones avanzadas basadas en capacidades
+                    let advancedConstraints = {};
+                    
+                    // Si la cámara soporta ISO, intentar aplicarlo
+                    if (capabilities.iso) {
+                        advancedConstraints.iso = config.isoValue;
+                    }
+                    
+                    // Si la cámara soporta balance de blancos, intentar aplicarlo
+                    if (capabilities.whiteBalanceMode) {
+                        advancedConstraints.whiteBalanceMode = config.whiteBalance;
+                    }
+                    
+                    // Aplicar restricciones avanzadas si hay alguna
+                    if (Object.keys(advancedConstraints).length > 0) {
+                        try { 
+                            await videoTrack.applyConstraints({ advanced: [advancedConstraints] }); 
+                        } catch (constraintError) { 
+                            console.warn('No se pudieron aplicar restricciones avanzadas:', constraintError); 
+                        }
+                    }
+                }
+                
+                return true; 
+            } catch (specificError) { 
+                console.warn('No se pudo acceder a la cámara especificada:', specificError); 
+                
+                // Si falló con una cámara específica, intentar con cualquier cámara
+                if (videoConfig.video.deviceId) { 
+                    delete videoConfig.video.deviceId;  
+                    mediaStream = await navigator.mediaDevices.getUserMedia(videoConfig);
+                    videoPreview.srcObject = mediaStream;
+                    return true;
+                } else { 
+                    throw specificError; 
+                }
+            }
+        } catch (error) { 
+            console.error('Error al iniciar la cámara:', error); 
+            alert('Error al iniciar la cámara: ' + error.message);
+            return false;
+        }
+    }
+    
+    // Mostrar pantalla de cámara
+    function showCameraScreen() {
+        welcomeScreen.style.opacity = 0;
+        setTimeout(() => {
+            welcomeScreen.style.display = 'none';
+            cameraScreen.style.display = 'flex';
+        }, 500);
+    }
+    
+    // Iniciar sesión de fotos
+    // Actualizar la función startSession para mejorar la experiencia
+function startSession() {
+    if (isSessionActive) return;
+    
+    // Obtener el número total de fotos de la plantilla
+    const totalPhotos = templateData.frames ? templateData.frames.length : 0;
+    
+    // Actualizar variables de estado
+    isSessionActive = true;
+    photosTaken = 0;
+    currentPhotoIndex = 0;
+    framePhotos = [];
+    
+    // Actualizar UI
+    startSessionBtn.disabled = true;
+    startSessionBtn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Tomando fotos...';
+    
+    // Actualizar contador de fotos
+    if (photosTakenElement) {
+        photosTakenElement.textContent = photosTaken;
+    }
+    if (totalPhotosElement && totalPhotos > 0) {
+        totalPhotosElement.textContent = totalPhotos;
+    }
+    
+    // Iniciar la cuenta regresiva para la primera foto
+    startCountdown();
+}
+
+    
+    // Iniciar cuenta atrás para tomar foto (usando el tiempo configurado)
+    function startCountdown() {
+    let timeLeft = config.countdownSeconds;
+    countdownDisplay.textContent = timeLeft;
+    countdownOverlay.style.display = 'flex';
+    
+    const countdownTimer = setInterval(() => {
+        timeLeft--;
+        
+        if (timeLeft <= 0) {
+            clearInterval(countdownTimer);
+            // Mostrar mensaje "Sonríe" durante 1 segundo
+            countdownDisplay.textContent = "¡Sonríe!";
+            
+            // Esperar 1 segundo adicional antes de tomar la foto
+            setTimeout(() => {
+                countdownOverlay.style.display = 'none';
+                // Tomar la foto
+                takePhoto();
+            }, 1000);
+        } else {
+            // Actualizar el contador normalmente
+            countdownDisplay.textContent = timeLeft;
+        }
+    }, 1000);
+}
+    
+    // Tomar foto
+    function takePhoto() {
+        // Crear un canvas para capturar la foto
+        const canvas = document.createElement('canvas');
+        
+        // Usar la resolución configurada
+        let width = 1280, height = 720;
+        if (config.cameraResolution) {
+            const [w, h] = config.cameraResolution.split('x').map(num => parseInt(num, 10));
+            width = w || width;
+            height = h || height;
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        
+        // Dibujar la imagen del video en el canvas
+        const context = canvas.getContext('2d');
+        context.drawImage(videoPreview, 0, 0, canvas.width, canvas.height);
+        
+        // Obtener URL de la imagen
+        const imageUrl = canvas.toDataURL('image/jpeg');
+        framePhotos.push(imageUrl);
+        
+        // Mostrar vista previa de la foto (durante el tiempo configurado)
+        photoPreviewImage.src = imageUrl;
+        photoPreviewOverlay.style.display = 'flex';
+        
+        // Guardar foto en el servidor
+        savePhotoToServer(imageUrl, currentPhotoIndex);
+        
+        // Actualizar progreso
+        photosTaken++;
+        updateProgressIndicators();
+
+         // Actualizar contador visual
+        if (photosTakenElement) {
+            photosTakenElement.textContent = photosTaken;
+        }
+        
+        // Esperar el tiempo de visualización configurado y pasar a la siguiente foto o finalizar sesión
+        setTimeout(() => {
+            photoPreviewOverlay.style.display = 'none';
+            
+            // Verificar si hay más fotos por tomar
+            currentPhotoIndex++;
+            if (currentPhotoIndex < templateData.frames.length) {
+                // Esperar el tiempo entre fotos configurado antes de tomar la siguiente
+                setTimeout(() => {
+                    startCountdown();
+                }, config.timeBetweenPhotos * 1000);
+            } else {
+                // Finalizar sesión
+                finishSession();
+            }
+        }, config.photoPreviewTime * 1000);
+    }
+    
+    // Guardar foto en el servidor
+    function savePhotoToServer(imageData, frameIndex) {
+        fetch("{% url 'save_session_photo' %}", {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token }}'
+            },
+            body: JSON.stringify({
+                session_id: window.session_id,
+                frame_index: frameIndex,
+                image_data: imageData
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (!data.success) {
+                console.error('Error al guardar la foto:', data.error);
+            }
+        })
+        .catch(error => {
+            console.error('Error al guardar la foto:', error);
+        });
+    }
+    
+       
+    // Finalizar sesión
+    function finishSession() {
+        // Mostrar pantalla de resultado
+        cameraScreen.style.display = 'none';
+        resultScreen.style.display = 'flex';
+        
+        // Crear el collage visual
+        createCollage();
+        // Mostrar confeti de celebración
+        //showCompletionCelebration();
+        
+        // Habilitar el botón de iniciar sesión para la próxima vez
+        startSessionBtn.disabled = false;
+        startSessionBtn.innerHTML = '<i class="fas fa-camera fa-lg me-2"></i> ¡TOMAR FOTOS!';
+        
+        // Guardar el collage en el servidor
+        saveCollageToServer();
+        
+        // Si está configurada la impresión automática, imprimir el collage
+        if (config.autoPrint === true) {
+            console.log("Impresión automática activada, imprimiendo...");
+            setTimeout(() => {
+                printCollage();
+            }, 1500); // Pequeño retraso para asegurar que el collage esté listo
+        } else {
+            console.log("Impresión automática desactivada");
+        }
+    }
+
+    // Nueva función para guardar el collage en el servidor
+    function saveCollageToServer() {
+    console.log("Guardando collage en el servidor...");
+
+    // 1. Oculta overlays que puedan estar activos
+    document.getElementById('photo-preview-overlay').style.display = 'none';
+    document.getElementById('countdown-overlay').style.display = 'none';
+
+    // 2. Forzar fondo blanco y opacidad 1 en el collage
+    const collageResult = document.getElementById('collage-result');
+    const prevBg = collageResult.style.backgroundColor;
+    const prevOpacity = collageResult.style.opacity;
+    const prevFilter = collageResult.style.filter;
+    collageResult.style.backgroundColor = "#fff";
+    collageResult.style.opacity = "1";
+    collageResult.style.filter = "none";
+
+    // 3. Ocultar la capa blanca de .result-screen::before
+    const resultScreen = document.getElementById('result-screen');
+    resultScreen.classList.add('hide-before');
+
+    // 4. Forzar reflow para asegurar que el navegador aplique el cambio de clase
+    void resultScreen.offsetHeight;
+
+    // 5. Esperar un pequeño tiempo para asegurar el render (opcional pero recomendado)
+    setTimeout(() => {
+        html2canvas(collageResult, {
+            useCORS: true,
+            allowTaint: true,
+            scale: 3, // Mayor calidad
+            logging: true
+        }).then(canvas => {
+            // Restaurar estilos originales
+            resultScreen.classList.remove('hide-before');
+            collageResult.style.backgroundColor = prevBg;
+            collageResult.style.opacity = prevOpacity;
+            collageResult.style.filter = prevFilter;
+
+            // Convertir el canvas a datos de imagen
+            const imageData = canvas.toDataURL('image/jpeg', 0.95);
+
+            // Enviar al servidor para guardar
+            fetch("{% url 'save_collage' %}", {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': '{{ csrf_token }}'
+                },
+                body: JSON.stringify({
+                    session_id: window.session_id,
+                    image_data: imageData,
+                    template_id: '{{ template.template_id }}',
+                    evento_id: '{{ evento.id }}'
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    console.log("Collage guardado exitosamente:", data.collage_id);
+                    enableWhatsAppForNewCollage();
+                } else {
+                    console.error("Error al guardar el collage:", data.error);
+                }
+            })
+            .catch(error => {
+                console.error("Error de comunicación al guardar collage:", error);
+            });
+        })
+        .catch(error => {
+            resultScreen.classList.remove('hide-before');
+            collageResult.style.backgroundColor = prevBg;
+            collageResult.style.opacity = prevOpacity;
+            collageResult.style.filter = prevFilter;
+            console.error("Error al generar imagen del collage:", error);
+        });
+    }, 100); // Espera 100ms para asegurar el render limpio
+    }
+    
+    // Crear el collage según la plantilla
+    function createCollage() {
+        if (!templateData.frames || !Array.isArray(templateData.frames)) {
+            console.error('No se encontraron marcos válidos en la plantilla');
+            return;
+        }
+        
+        // Configurar el fondo del collage
+        collageResult.style.width = "15cm";
+        collageResult.style.height = "10cm";
+        collageResult.style.backgroundColor = templateData.backgroundColor || 'white';
+        
+        if (templateData.backgroundImage && templateData.backgroundImage !== 'none') {
+            // Para URLs de imágenes cargadas en el servidor
+            {% if template.background_image %}
+                collageResult.style.backgroundImage = "url('{{ template.background_image.url }}')";
+            {% endif %}
+            
+            // Aplicar propiedades de fondo según la plantilla
+            collageResult.style.backgroundImage = "url('{{ template.background_image.url }}')";
+            collageResult.style.backgroundSize = templateData.backgroundSize || 'cover';
+            collageResult.style.backgroundPosition = templateData.backgroundPosition || 'center';
+            collageResult.style.backgroundRepeat = templateData.backgroundRepeat || 'no-repeat';
+        }
+        
+        // Limpiar el contenedor del collage
+        collageResult.innerHTML = '';
+        
+        // Añadir las fotos al collage según la plantilla
+        framePhotos.forEach((photoUrl, index) => {
+            if (index < templateData.frames.length) {
+                const frame = templateData.frames[index];
+                
+                const photoElement = document.createElement('div');
+                photoElement.style.position = 'absolute';
+                photoElement.style.width = frame.width;
+                photoElement.style.height = frame.height;
+                photoElement.style.left = frame.left;
+                photoElement.style.top = frame.top;
+                photoElement.style.overflow = 'hidden';
+                
+                // Aplicar rotación si está definida en la plantilla
+                if (frame.rotation) {
+                    photoElement.style.transform = `rotate(${frame.rotation}deg)`;
+                }
+                
+                // Aplicar estilo de borde si está definido
+                if (frame.borderWidth) {
+                    photoElement.style.border = `${frame.borderWidth} ${frame.borderStyle || 'solid'} ${frame.borderColor || '#FFFFFF'}`;
+                }
+                
+                // Aplicar esquinas redondeadas si está definido
+                if (frame.borderRadius) {
+                    photoElement.style.borderRadius = frame.borderRadius;
+                }
+                
+                const img = document.createElement('img');
+                img.src = photoUrl;
+                img.style.width = '100%';
+                img.style.height = '100%';
+                img.style.objectFit = 'cover';
+                
+                photoElement.appendChild(img);
+                collageResult.appendChild(photoElement);
+            }
+        });
+    }
+    
+    
+    // Imprimir el collage
+    
+ 
+        
+function showPrintNotification(success, message) {
+    // Eliminar notificaciones anteriores si existen
+    const oldNotifications = document.querySelectorAll('.print-notification');
+    oldNotifications.forEach(notification => {
+        document.body.removeChild(notification);
+    });
+    
+    // Crear elemento de notificación
+    const notification = document.createElement('div');
+    notification.className = `print-notification alert alert-${success ? 'success' : 'danger'}`;
+    notification.innerHTML = `
+        <i class="fas fa-${success ? 'check-circle' : 'exclamation-circle'}"></i> ${message}
+    `;
+    
+    // Aplicar estilos
+    notification.style.position = 'fixed';
+    notification.style.bottom = '20px';
+    notification.style.right = '20px';
+    notification.style.zIndex = '9999';
+    notification.style.minWidth = '300px';
+    notification.style.padding = '15px';
+    notification.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+    notification.style.opacity = '0';
+    notification.style.transform = 'translateY(20px)';
+    notification.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
+    
+    // Añadir a la página
+    document.body.appendChild(notification);
+    
+    // Aplicar animación de entrada
+    setTimeout(() => {
+        notification.style.opacity = '1';
+        notification.style.transform = 'translateY(0)';
+    }, 10);
+    
+    // Reproducir sonido (opcional)
+    try {
+        const audioElement = document.createElement('audio');
+        audioElement.src = success ? '/static/sounds/success.mp3' : '/static/sounds/error.mp3';
+        audioElement.volume = 0.5;
+        audioElement.play().catch(e => console.log('No se pudo reproducir sonido'));
+    } catch (e) {
+        console.log('Audio no soportado');
+    }
+    
+    // Mantener visible por 5 segundos y luego eliminar con animación
+    setTimeout(() => {
+        notification.style.opacity = '0';
+        notification.style.transform = 'translateY(20px)';
+        
+        setTimeout(() => {
+            if (document.body.contains(notification)) {
+                document.body.removeChild(notification);
+            }
+        }, 300);
+    }, 5000);
+    
+    // También registrar en la consola
+    if (success) {
+        console.log('✅ ' + message);
+    } else {
+        console.error('❌ ' + message);
+    }
+}
+    
+    // Imprimir usando el navegador
+    function printCollageWithBrowser() {
+        // Añadir estilos de impresión
+        const styleSheet = document.createElement('style');
+        styleSheet.type = 'text/css';
+        styleSheet.id = 'print-styles';
+        styleSheet.innerHTML = `
+            @media print {
+                @page {
+                    size: ${config.paperSize.replace('x', 'cm ')}cm;
+                    margin: 0;
+                }
+                body * {
+                    visibility: hidden;
+                }
+                #collage-result, #collage-result * {
+                    visibility: visible;
+                }
+                #collage-result {
+                    position: absolute;
+                    left: 0;
+                    top: 0;
+                    width: 10cm;
+                    height: 15cm;
+                    margin: 0;
+                    padding: 0;
+                    box-shadow: none;
+                }
+            }
+        `;
+        document.head.appendChild(styleSheet);
+        
+        // Imprimir
+        window.print();
+        
+        // Eliminar estilos después de imprimir
+        setTimeout(() => {
+            const printStyles = document.getElementById('print-styles');
+            if (printStyles) {
+                printStyles.parentNode.removeChild(printStyles);
+            }
+        }, 1000);
+        
+        // Actualizar contador de impresiones
+        updatePrintCount('{{ session_id }}');
+    }
+    
+    // Reiniciar el proceso - VERSIÓN CORREGIDA
+async function restart() {
+    console.log("Iniciando reinicio de sesión...");
+    
+    // Ocultar pantalla de resultado
+    resultScreen.style.display = 'none';
+    
+    window.session_id = generateUUID(); // Generar un nuevo session_id para la nueva sesión
+
+    // Resetear variables de estado
+    photosTaken = 0;
+    currentPhotoIndex = 0;
+    framePhotos = [];
+    isSessionActive = false;
+    
+    // Resetear el botón de iniciar sesión
+    startSessionBtn.disabled = false;
+    startSessionBtn.innerHTML = '<i class="fas fa-camera fa-lg me-2"></i> ¡TOMAR FOTOS!';
+    
+    // Actualizar contador de fotos
+    if (photosTakenElement) {
+        photosTakenElement.textContent = 0;
+    }
+    
+    // Limpiar el collage
+    collageResult.innerHTML = '';
+    
+    // Actualizar indicadores de progreso
+    updateProgressIndicators();
+    resetWhatsAppButton();
+    // IMPORTANTE: Reinicializar la cámara
+    try {
+        console.log("Reinicializando cámara...");
+        const cameraSuccess = await initCamera();
+        
+        if (cameraSuccess) {
+            console.log("Cámara reinicializada correctamente");
+            
+            // Mostrar pantalla de cámara directamente (sin volver a bienvenida)
+            cameraScreen.style.display = 'flex';
+            
+            // Opcional: Si quieres volver a la pantalla de bienvenida, usa esto en su lugar:
+            // welcomeScreen.style.opacity = 1;
+            // welcomeScreen.style.display = 'flex';
+            // cameraScreen.style.display = 'none';
+            
+        } else {
+            console.error("Error al reinicializar la cámara");
+            alert("Error al reinicializar la cámara. Por favor, recarga la página.");
+        }
+    } catch (error) {
+        console.error("Error durante el reinicio:", error);
+        alert("Error durante el reinicio: " + error.message);
+    }
+}
+    
+    // Función para entrar y salir de pantalla completa
+    function toggleFullScreen() {
+        if (!document.fullscreenElement) {
+            // Entrar en pantalla completa
+            if (document.documentElement.requestFullscreen) {
+                document.documentElement.requestFullscreen();
+            } else if (document.documentElement.webkitRequestFullscreen) { // Safari
+                document.documentElement.webkitRequestFullscreen();
+            } else if (document.documentElement.msRequestFullscreen) { // IE11
+                document.documentElement.msRequestFullscreen();
+            }
+        } else {
+            // Salir de pantalla completa
+            if (document.exitFullscreen) {
+                document.exitFullscreen();
+            } else if (document.webkitExitFullscreen) { // Safari
+                document.webkitExitFullscreen();
+            } else if (document.msExitFullscreen) { // IE11
+               document.msExitFullscreen();
+            }
+        }
+    }
+    
+    // Actualizar contador de impresiones
+    function updatePrintCount(sessionId) {
+        fetch("{% url 'update_print_count' %}", {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token }}'
+            },
+            body: JSON.stringify({
+                session_id: window.session_id
+            })
+        }).catch(error => {
+            console.error('Error al actualizar contador:', error);
+        });
+    }
+    
+    function generateUUID() {
+    // Generador simple de UUID v4
+    return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
+        (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+    );
+    }
+    // Event Listeners
+    startCameraBtn.addEventListener('click', async function() {
+        // Entrar en pantalla completa al iniciar la cámara
+        toggleFullScreen();
+        
+        const success = await initCamera();
+        if (success) {
+            showCameraScreen();
+            setupProgressIndicators();
+        }
+    });
+    
+    startSessionBtn.addEventListener('click', function() {
+        startSession();
+    });
+    
+    restartBtn.addEventListener('click', function() {
+    window.session_id = generateUUID(); // <-- Nuevo session_id para la nueva sesión
+    // Oculta todas las pantallas menos la bienvenida
+    resultScreen.style.display = 'none';
+    cameraScreen.style.display = 'none';
+    welcomeScreen.style.display = 'flex';
+    welcomeScreen.style.opacity = 1;
+
+    // Detiene la cámara si está activa
+    if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        mediaStream = null;
+    }
+
+    // Limpiar overlays y previews
+    countdownOverlay.style.display = 'none';
+    photoPreviewOverlay.style.display = 'none';
+
+    // Limpiar collage y progreso
+    collageResult.innerHTML = '';
+    progressIndicator.innerHTML = '';
+
+    // Resetear variables de estado
+    photosTaken = 0;
+    currentPhotoIndex = 0;
+    framePhotos = [];
+    isSessionActive = false;
+
+    // Resetear contadores visuales
+    if (photosTakenElement) photosTakenElement.textContent = 0;
+    if (totalPhotosElement) totalPhotosElement.textContent = templateData.frames.length;
+
+    // Resetear botones
+    startSessionBtn.disabled = false;
+    startSessionBtn.innerHTML = '<i class="fas fa-camera fa-lg me-2"></i> ¡TOMAR FOTOS!';
+    resetWhatsAppButton();
+
+    // (Opcional) Si quieres reiniciar el progreso visual:
+    setupProgressIndicators();
+
+    // Mantener pantalla completa (no hace falta volver a pedirla si ya está)
+    // Si quieres forzar pantalla completa de nuevo, puedes llamar a toggleFullScreen();
+    });
+
+    printBtn.addEventListener('click', function() {
+        printCollage();
+    });
+
+// Variable global para evitar múltiples impresiones simultáneas
+let isPrintingInProgress = false;
+
+// En el archivo session.html, actualiza la función printCollage
+function printCollage() {
+    console.log("=== INICIO DE printCollage() ===");
+    
+    // Prevenir múltiples solicitudes simultáneas
+    if (isPrintingInProgress) {
+        console.warn("⚠️ Ya hay una impresión en proceso, ignorando nueva solicitud");
+        showPrintNotification(false, 'Ya hay una impresión en proceso. Espera un momento.');
+        return;
+    }
+    
+    isPrintingInProgress = true;
+    
+    // Obtener la impresora configurada
+    const selectedPrinter = config.printerName;
+    console.log("Impresora seleccionada:", selectedPrinter);
+    
+    // Verificar si hay impresora configurada
+    if (!selectedPrinter || selectedPrinter.trim() === '') {
+        console.warn("No hay impresora seleccionada, usando método del navegador");
+        showPrintNotification(false, 'No hay impresora configurada. Usando impresión del navegador.');
+        setTimeout(() => {
+            printCollageWithBrowser();
+            isPrintingInProgress = false; // Resetear flag
+        }, 500);
+        return;
+    }
+    
+    console.log("Generando imagen del collage con html2canvas...");
+    
+    // Mostrar indicador de carga
+    const loadingIndicator = document.createElement('div');
+    loadingIndicator.className = 'loading-indicator';
+    loadingIndicator.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Imprimiendo...';
+    loadingIndicator.style.position = 'fixed';
+    loadingIndicator.style.top = '50%';
+    loadingIndicator.style.left = '50%';
+    loadingIndicator.style.transform = 'translate(-50%, -50%)';
+    loadingIndicator.style.backgroundColor = 'rgba(0,0,0,0.7)';
+    loadingIndicator.style.color = 'white';
+    loadingIndicator.style.padding = '20px';
+    loadingIndicator.style.borderRadius = '10px';
+    loadingIndicator.style.zIndex = '10000';
+    
+    document.body.appendChild(loadingIndicator);
+    const collage = document.querySelector('.collage-result');
+    collage.classList.add('printing');
+    try {
+        html2canvas(collageResult, {
+            useCORS: true,      // Permitir imágenes de diferentes dominios
+            allowTaint: true,   // Permitir contenido que podría "contaminar" el canvas
+            scale: 3,           // Usar escala menor para reducir tamaño de datos
+            logging: true       // Activar logs para depuración
+        })
+        .then(canvas => {
+            // === ROTAR EL CANVAS 90 GRADOS ===
+            const rotatedCanvas = document.createElement('canvas');
+            rotatedCanvas.width = canvas.height;
+            rotatedCanvas.height = canvas.width;
+            const ctx = rotatedCanvas.getContext('2d');
+            ctx.translate(rotatedCanvas.width / 2, rotatedCanvas.height / 2);
+            ctx.rotate(-Math.PI / 2); // -90 grados (sentido horario)
+            ctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+
+            // Usar el canvas rotado para la impresión
+            const imageData = rotatedCanvas.toDataURL('image/jpeg', 1.0);
+
+            console.log("Enviando datos a la API de impresión...");
+            console.log("Tamaño de la imagen:", Math.round(imageData.length / 1024), "KB");
+            
+            return fetch('{% url "print_document" %}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': '{{ csrf_token }}'
+                },
+                body: JSON.stringify({
+                    printer_name: selectedPrinter,
+                    document_content: imageData,
+                    paper_size: config.paperSize || "A4",
+                    copies: config.printCopies || 0,
+                    quality: config.printQuality || "high"
+                })
+            });
+            collage.classList.remove('printing');
+        })
+        
+        .then(response => {
+        console.log("Respuesta recibida del servidor:", response.status);
+
+        if (!response.ok) {
+            // Si es error 429 (demasiado rápido), NO intentar método alterno
+            if (response.status === 429) {
+                document.body.removeChild(loadingIndicator);
+                showPrintNotification(false, 'Debes esperar antes de volver a imprimir.');
+                // Aquí simplemente retornas y NO llamas a printCollageWithBrowser
+                return Promise.reject(new Error('Solicitud rechazada por límite de tiempo'));
+            }
+            throw new Error(`Error HTTP: ${response.status}`);
+        }
+
+        return response.json();
+        })
+        .then(data => {
+            console.log("Datos de respuesta:", data);
+            
+            // Quitar indicador de carga
+            document.body.removeChild(loadingIndicator);
+            
+            if (data.success) {
+                if (data.background) {
+                    // Impresión en segundo plano - respuesta inmediata
+                    console.log("Impresión iniciada en segundo plano");
+                    showPrintNotification(true, 'Impresión iniciada en segundo plano en impresora térmica');
+                    
+                    // Actualizar contador de impresiones
+                    updatePrintCount('{{ session_id }}');
+                } else {
+                    console.log("¡Impresión completada!");
+                    showPrintNotification(true, 'Collage enviado a la impresora correctamente');
+                    updatePrintCount('{{ session_id }}');
+                }
+                isPrintingInProgress = false; // Resetear flag al completar
+            } else {
+                console.error("Error de impresión reportado por el servidor:", data.error);
+                showPrintNotification(false, 'Error en impresora térmica. Usando método del navegador.');
+                
+                // Si hay error, usar automáticamente el método del navegador
+                console.log("Fallback: usando método de navegador debido a error en servidor");
+                setTimeout(() => {
+                    printCollageWithBrowser(); 
+                    isPrintingInProgress = false; // Resetear flag después del fallback
+                }, 1000);
+            }
+        })
+        .catch(error => {
+            // Solo intentar método alterno si el error NO es por límite de tiempo
+            if (error.message.includes('límite de tiempo') || error.message.includes('429')) {
+                // No hacer nada, ya se notificó al usuario
+                isPrintingInProgress = false; // Resetear flag para permitir nuevos intentos después
+                return;
+            }
+            if (document.body.contains(loadingIndicator)) {
+                document.body.removeChild(loadingIndicator);
+            }
+            console.error('Error de comunicación con impresora térmica:', error.message);
+            showPrintNotification(false, 'Error de comunicación con impresora. Usando método del navegador.');
+            setTimeout(() => {
+                printCollageWithBrowser();
+                isPrintingInProgress = false; // Resetear flag después del fallback
+            }, 1000);
+        });
+    } catch (error) {
+        console.error('Error al generar imagen del collage:', error);
+        
+        // Quitar indicador de carga
+        if (document.body.contains(loadingIndicator)) {
+            document.body.removeChild(loadingIndicator);
+        }
+        
+        showPrintNotification(false, 'Error al generar imagen: ' + error.message);
+        
+        // Usar método alternativo
+        console.log("Usando método de navegador debido a error en html2canvas");
+        setTimeout(() => {
+            printCollageWithBrowser();
+            isPrintingInProgress = false; // Resetear flag después del fallback
+        }, 1000);
+    }
+}   
+    // ========== SOLUCIÓN PARA RESETEAR EL BOTÓN WHATSAPP
+
+// Variable global para controlar el estado del botón
+let whatsappButtonReady = true;
+
+// Función para generar un nombre de archivo único para el collage
+function generateUniqueFilename(sessionId) {
+    const now = new Date();
+    const timestamp = now.getFullYear().toString() +
+        (now.getMonth() + 1).toString().padStart(2, '0') +
+        now.getDate().toString().padStart(2, '0') + '_' +
+        now.getHours().toString().padStart(2, '0') +
+        now.getMinutes().toString().padStart(2, '0') +
+        now.getSeconds().toString().padStart(2, '0');
+    return `collage_${sessionId}_${timestamp}.jpg`;
+}
+
+// Función para resetear el botón WhatsApp después del proceso
+function resetWhatsAppButton() {
+    const whatsappBtn = document.getElementById('share-whatsapp-btn');
+    if (whatsappBtn) {
+        // Restaurar estado original
+        whatsappBtn.disabled = false;
+        whatsappBtn.innerHTML = '<i class="fab fa-whatsapp"></i> Compartir por WhatsApp';
+        whatsappBtn.className = 'btn btn-success btn-lg btn-photobooth';
+        
+        // Marcar como listo para usar
+        whatsappButtonReady = true;
+        
+        console.log('✅ Botón WhatsApp reseteado y listo para usar');
+    }
+}
+
+// Función para marcar el botón como procesando
+function setWhatsAppButtonProcessing() {
+    const whatsappBtn = document.getElementById('share-whatsapp-btn');
+    if (whatsappBtn) {
+        whatsappButtonReady = false;
+        whatsappBtn.disabled = true;
+        whatsappBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Enviando...';
+        whatsappBtn.className = 'btn btn-warning btn-lg btn-photobooth';
+    }
+}
+
+// Función para marcar el botón como enviado temporalmente
+function setWhatsAppButtonSent() {
+    const whatsappBtn = document.getElementById('share-whatsapp-btn');
+    if (whatsappBtn) {
+        whatsappBtn.disabled = true;
+        whatsappBtn.innerHTML = '<i class="fas fa-check-circle"></i> Enviado al móvil';
+        whatsappBtn.className = 'btn btn-info btn-lg btn-photobooth';
+        
+        // Auto-resetear después de 3 segundos para permitir reenvío
+        setTimeout(() => {
+            resetWhatsAppButton();
+        }, 3000);
+    }
+}
+
+// Función para marcar el botón con error y permitir reintento
+function setWhatsAppButtonError(errorMessage) {
+    const whatsappBtn = document.getElementById('share-whatsapp-btn');
+    if (whatsappBtn) {
+        whatsappBtn.disabled = false;
+        whatsappBtn.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Reintentar';
+        whatsappBtn.className = 'btn btn-danger btn-lg btn-photobooth';
+        whatsappButtonReady = true;
+        
+        // Mostrar error
+        console.error('❌ Error WhatsApp:', errorMessage);
+        
+        // Auto-resetear después de 5 segundos
+        setTimeout(() => {
+            resetWhatsAppButton();
+        }, 5000);
+    }
+}
+
+
+    // Función para habilitar el botón cuando hay un nuevo collage
+function enableWhatsAppForNewCollage() {
+    console.log('🆕 Nuevo collage disponible, habilitando WhatsApp...');
+    resetWhatsAppButton();
+}
+
+// Función para generar un nombre de archivo único para el collage
+function generateUniqueFilename(sessionId) {
+    const now = new Date();
+    const timestamp = now.getFullYear().toString() +
+        (now.getMonth() + 1).toString().padStart(2, '0') +
+        now.getDate().toString().padStart(2, '0') + '_' +
+        now.getHours().toString().padStart(2, '0') +
+        now.getMinutes().toString().padStart(2, '0') +
+        now.getSeconds().toString().padStart(2, '0');
+    return `collage_${sessionId}_${timestamp}.jpg`;
+}
+    
+    // Configurar botón de WhatsApp para envío a dispositivo móvil
+if (document.getElementById('share-whatsapp-btn')) {
+    document.getElementById('share-whatsapp-btn').addEventListener('click', function(event) {
+        // Prevenir múltiples clicks
+        if (!whatsappButtonReady) {
+            console.log('⏳ Botón WhatsApp no está listo, ignorando click');
+            return;
+        }
+        
+        console.log("📱 Iniciando envío a dispositivo móvil...");
+        
+        // Marcar como procesando
+        setWhatsAppButtonProcessing();
+        
+        // Generar nombre único para el archivo
+        const uniqueFilename = generateUniqueFilename('{{ session_id }}');
+        
+        // Mostrar indicador de carga
+        const loadingIndicator = document.createElement('div');
+        loadingIndicator.className = 'loading-indicator';
+        loadingIndicator.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Enviando al dispositivo móvil...';
+        loadingIndicator.style.position = 'fixed';
+        loadingIndicator.style.top = '50%';
+        loadingIndicator.style.left = '50%';
+        loadingIndicator.style.transform = 'translate(-50%, -50%)';
+        loadingIndicator.style.backgroundColor = 'rgba(0,0,0,0.8)';
+        loadingIndicator.style.color = 'white';
+        loadingIndicator.style.padding = '20px';
+        loadingIndicator.style.borderRadius = '10px';
+        loadingIndicator.style.zIndex = '10000';
+        loadingIndicator.style.textAlign = 'center';
+        
+        document.body.appendChild(loadingIndicator);
+        
+        // Enviar al dispositivo móvil con nombre único
+        fetch('{% url "send_to_mobile_device" %}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token }}'
+            },
+            body: JSON.stringify({
+                session_id: window.session_id,
+                filename: uniqueFilename // <--- nombre único aquí
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            // Remover indicador de carga
+            document.body.removeChild(loadingIndicator);
+            
+            if (data.success) {
+                console.log('✅ Collage enviado exitosamente al móvil');
+                
+                // Marcar como enviado
+                setWhatsAppButtonSent();
+                
+                // Mostrar instrucciones
+                showMobileInstructions();
+                
+                // Iniciar monitoreo del estado
+                startTransferStatusMonitoring(data.session_id);
+                
+            } else {
+                console.error('❌ Error del servidor:', data.error);
+                setWhatsAppButtonError(data.error);
+                showTransferNotification(false, 'Error: ' + data.error);
+            }
+        })
+        .catch(error => {
+            console.error('❌ Error enviando a dispositivo móvil:', error);
+            
+            // Limpiar UI en caso de error
+            if (document.body.contains(loadingIndicator)) {
+                document.body.removeChild(loadingIndicator);
+            }
+            
+            setWhatsAppButtonError('Error de comunicación: ' + error.message);
+            showTransferNotification(false, 'Error de comunicación: ' + error.message);
+        });
+    });
+}
+
+// Función para mostrar notificaciones de transferencia
+function showTransferNotification(success, message) {
+    // Eliminar notificaciones anteriores
+    const oldNotifications = document.querySelectorAll('.transfer-notification');
+    oldNotifications.forEach(notification => {
+        if (document.body.contains(notification)) {
+            document.body.removeChild(notification);
+        }
+    });
+    
+    // Crear nueva notificación
+    const notification = document.createElement('div');
+    notification.className = `transfer-notification alert alert-${success ? 'success' : 'danger'}`;
+    notification.style.position = 'fixed';
+    notification.style.top = '20px';
+    notification.style.right = '20px';
+    notification.style.zIndex = '9999';
+    notification.style.minWidth = '350px';
+    notification.style.maxWidth = '500px';
+    notification.style.padding = '15px';
+    notification.style.borderRadius = '8px';
+    notification.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+    notification.style.opacity = '0';
+    notification.style.transform = 'translateY(-20px)';
+    notification.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
+    
+    notification.innerHTML = `
+        <div style="display: flex; align-items: center;">
+            <i class="fas fa-${success ? 'check-circle' : 'exclamation-triangle'}" style="margin-right: 10px; font-size: 1.2em;"></i>
+            <div>
+                <strong>${success ? 'Éxito' : 'Error'}</strong><br>
+                <span>${message}</span>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(notification);
+    
+    // Animación de entrada
+    setTimeout(() => {
+        notification.style.opacity = '1';
+        notification.style.transform = 'translateY(0)';
+    }, 10);
+    
+    // Auto-remover después de 8 segundos (más tiempo para leer el mensaje)
+    setTimeout(() => {
+        if (document.body.contains(notification)) {
+            notification.style.opacity = '0';
+            notification.style.transform = 'translateY(-20px)';
+            
+            setTimeout(() => {
+                if (document.body.contains(notification)) {
+                    document.body.removeChild(notification);
+                }
+            }, 300);
+        }
+    }, 3000);
+}
+
+// Función para mostrar instrucciones para el usuario
+function showMobileInstructions() {
+    const modal = document.createElement('div');
+    modal.className = 'mobile-instructions-modal';
+    modal.style.position = 'fixed';
+    modal.style.top = '0';
+    modal.style.left = '0';
+    modal.style.width = '100%';
+    modal.style.height = '100%';
+    modal.style.backgroundColor = 'rgba(0,0,0,0.8)';
+    modal.style.zIndex = '10001';
+    modal.style.display = 'flex';
+    modal.style.justifyContent = 'center';
+    modal.style.alignItems = 'center';
+    
+    modal.innerHTML = `
+        <div style="background: white; padding: 30px; border-radius: 15px; max-width: 500px; text-align: center;">
+            <h3 style="color: #28a745; margin-bottom: 20px;">
+                <i class="fas fa-mobile-alt"></i> ¡Collage Enviado!
+            </h3>
+            <p style="font-size: 1.1em; margin-bottom: 20px;">
+                Tu collage ha sido enviado al dispositivo móvil.
+            </p>
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                <h4 style="color: #495057; margin-bottom: 15px;">Próximos pasos:</h4>
+                <ol style="text-align: left; color: #6c757d;">
+                    <li>Dirígete al dispositivo móvil</li>
+                    <li>Completa tus datos (nombre, teléfono)</li>
+                    <li>Revisa tu collage</li>
+                    <li>Envía por WhatsApp</li>
+                </ol>
+            </div>
+            <button onclick="closeMobileInstructions()" 
+                    style="background: #28a745; color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-size: 1em;">
+                <i class="fas fa-check"></i> Entendido
+            </button>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    // Cerrar modal al hacer clic fuera
+    modal.addEventListener('click', function(e) {
+        if (e.target === modal) {
+            closeMobileInstructions();
+        }
+    });
+}
+
+// Función para cerrar las instrucciones
+function closeMobileInstructions() {
+    const modal = document.querySelector('.mobile-instructions-modal');
+    if (modal && document.body.contains(modal)) {
+        document.body.removeChild(modal);
+    }
+}
+// Hacer global la función para que el botón la encuentre
+window.closeMobileInstructions = closeMobileInstructions;
+
+// Función para monitorear el estado de la transferencia
+function startTransferStatusMonitoring(sessionId) {
+    console.log(`Iniciando monitoreo para sesión: ${sessionId}`);
+    
+    let statusCheckInterval;
+    let checkCount = 0;
+    const maxChecks = 120; // 10 minutos máximo (cada 5 segundos)
+    
+    statusCheckInterval = setInterval(() => {
+        checkCount++;
+        
+        fetch(`{% url "check_mobile_transfer_status" %}?session_id=${window.session_id}`)
+        .then(response => response.json())
+        .then(data => {
+            console.log(`Estado check #${checkCount}:`, data);
+            
+            if (data.success && data.status) {
+                const status = data.status.status;
+                
+                // Actualizar indicador visual del estado
+                updateTransferStatusIndicator(status, data.status);
+                
+                // Si se completó o falló, detener el monitoreo
+                if (status === 'completed' || status === 'whatsapp_sent') {
+                    clearInterval(statusCheckInterval);
+                    showTransferNotification(true, '¡Collage enviado por WhatsApp exitosamente!');
+                    showCompletionCelebration();
+                } else if (status === 'failed' || status === 'cancelled') {
+                    clearInterval(statusCheckInterval);
+                    showTransferNotification(false, 'El envío fue cancelado o falló.');
+                }
+            }
+            
+            // Detener después del número máximo de checks
+            if (checkCount >= maxChecks) {
+                clearInterval(statusCheckInterval);
+                console.log('Monitoreo detenido: tiempo máximo alcanzado');
+            }
+        })
+        .catch(error => {
+            console.error('Error verificando estado:', error);
+            
+            // Si hay muchos errores consecutivos, detener el monitoreo
+            if (checkCount > 10) {
+                clearInterval(statusCheckInterval);
+            }
+        });
+    }, 5000); // Verificar cada 5 segundos
+}
+
+// Función para actualizar el indicador visual del estado
+function updateTransferStatusIndicator(status, statusData) {
+    // Remover indicador anterior si existe
+    const oldIndicator = document.querySelector('.transfer-status-indicator');
+    if (oldIndicator && document.body.contains(oldIndicator)) {
+        document.body.removeChild(oldIndicator);
+    }
+    
+    // Solo mostrar para estados intermedios
+    if (status === 'completed' || status === 'failed' || status === 'cancelled') {
+        return;
+    }
+    
+    const indicator = document.createElement('div');
+    indicator.className = 'transfer-status-indicator';
+    indicator.style.position = 'fixed';
+    indicator.style.bottom = '20px';
+    indicator.style.left = '20px';
+    indicator.style.backgroundColor = '#007bff';
+    indicator.style.color = 'white';
+    indicator.style.padding = '10px 15px';
+    indicator.style.borderRadius = '25px';
+    indicator.style.zIndex = '9998';
+    indicator.style.fontSize = '0.9em';
+    indicator.style.boxShadow = '0 2px 8px rgba(0,0,0,0.2)';
+    
+    let statusText = '';
+    let iconClass = 'fas fa-clock';
+    
+    switch (status) {
+        case 'sent_to_device':
+            statusText = 'Enviado al móvil';
+            iconClass = 'fas fa-mobile-alt';
+            break;
+        case 'data_collected':
+            statusText = 'Datos recopilados';
+            iconClass = 'fas fa-user-check';
+            break;
+        case 'whatsapp_sent':
+            statusText = 'Enviado por WhatsApp';
+            iconClass = 'fab fa-whatsapp';
+            break;
+        default:
+            statusText = 'Procesando...';
+            iconClass = 'fas fa-spinner fa-spin';
+    }
+    
+    indicator.innerHTML = `<i class="${iconClass}"></i> ${statusText}`;
+    document.body.appendChild(indicator);
+}
+
+// Función para mostrar celebración de completación
+function showCompletionCelebration() {
+    // Crear contenedor de confeti
+    const confettiContainer = document.createElement('div');
+    confettiContainer.className = 'celebration-confetti';
+    confettiContainer.style.opacity = '0';
+    confettiContainer.style.transition = 'opacity 0.5s ease';
+
+    // Colores llamativos para el confeti
+    const confettiColors = [
+        '#FF6B6B', '#FFD93D', '#6BCB77', '#4D96FF', '#FF8E53', '#A259F7', '#43E97B', '#38F9D7', '#F6416C', '#FFDE7D'
+    ];
+    const confettiCount = 60;
+    const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+
+    for (let i = 0; i < confettiCount; i++) {
+        const confetti = document.createElement('div');
+        confetti.className = 'confetti-piece';
+        const color = confettiColors[Math.floor(Math.random() * confettiColors.length)];
+        confetti.style.background = color;
+        confetti.style.left = Math.random() * 100 + 'vw';
+        confetti.style.top = (Math.random() * -20) + 'vh';
+        confetti.style.transform = `rotate(${Math.random() * 360}deg)`;
+        confetti.style.opacity = (0.7 + Math.random() * 0.3).toFixed(2);
+        confetti.style.animationDelay = (Math.random() * 0.7) + 's';
+        confettiContainer.appendChild(confetti);
+    }
+
+    document.body.appendChild(confettiContainer);
+    setTimeout(() => {
+        confettiContainer.style.opacity = '1';
+    }, 10);
+
+    // Remover confeti después de 3.2 segundos
+    setTimeout(() => {
+        confettiContainer.style.opacity = '0';
+        setTimeout(() => {
+            if (document.body.contains(confettiContainer)) {
+                document.body.removeChild(confettiContainer);
+            }
+        }, 600);
+    }, 3200);
+
+    setTimeout(() => {
+        console.log('🎉 Proceso WhatsApp completado, reseteando botón...');
+        resetWhatsAppButton();
+    }, 3000);
+
+    // Remover indicador de estado si existe
+    const statusIndicator = document.querySelector('.transfer-status-indicator');
+    if (statusIndicator && document.body.contains(statusIndicator)) {
+        document.body.removeChild(statusIndicator);
+    }
+}
+
+// Función para verificar estado del dispositivo al cargar la página
+function checkDeviceStatus() {
+    fetch('{% url "get_device_status" %}')
+    .then(response => response.json())
+    .then(data => {
+        const whatsappBtn = document.getElementById('share-whatsapp-btn');
+        
+        if (data.success && data.connected) {
+            // Dispositivo conectado
+            console.log('Dispositivo móvil conectado:', data.device_info);
+            
+            if (whatsappBtn) {
+                whatsappBtn.disabled = false;
+                whatsappBtn.title = `Dispositivo conectado: ${data.device_info.manufacturer} ${data.device_info.model}`;
+                
+                // Agregar indicador visual de dispositivo conectado
+                {% comment %} const deviceIndicator = document.createElement('span');
+                deviceIndicator.style.color = '#28a745';
+                deviceIndicator.style.fontSize = '0.8em';
+                deviceIndicator.style.display = 'block';
+                deviceIndicator.innerHTML = '<i class="fas fa-mobile-alt"></i> Dispositivo conectado'; {% endcomment %}
+                
+                whatsappBtn.parentNode.insertBefore(deviceIndicator, whatsappBtn.nextSibling);
+            }
+        } else {
+            // Dispositivo no conectado
+            console.log('Dispositivo móvil no conectado');
+            
+            if (whatsappBtn) {
+                whatsappBtn.disabled = true;
+                whatsappBtn.title = 'Conecta un dispositivo móvil por USB para enviar por WhatsApp';
+                whatsappBtn.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Conectar Dispositivo';
+                
+                // Agregar indicador visual de dispositivo no conectado
+                {% comment %} const deviceWarning = document.createElement('span');
+                deviceWarning.style.color = '#dc3545';
+                deviceWarning.style.fontSize = '0.8em';
+                deviceWarning.style.display = 'block';
+                deviceWarning.innerHTML = '<i class="fas fa-unlink"></i> Dispositivo no conectado'; {% endcomment %}
+                
+                whatsappBtn.parentNode.insertBefore(deviceWarning, whatsappBtn.nextSibling);
+            }
+        }
+    })
+    .catch(error => {
+        console.error('Error verificando estado del dispositivo:', error);
+    });
+}
+
+// Ejecutar verificación de dispositivo al cargar la página
+document.addEventListener('DOMContentLoaded', function() {
+    // Esperar un poco antes de verificar para asegurar que la página esté completamente cargada
+    setTimeout(() => {
+        checkDeviceStatus();
+    }, 1000);
+});
+
+// Verificar dispositivo periódicamente (cada 30 segundos)
+setInterval(checkDeviceStatus, 30000);
+    
+    // Configurar botón de impresión manual
+    // Configurar botón de impresión manual
+    if (document.getElementById('print-btn')) {
+        document.getElementById('print-btn').addEventListener('click', function() {
+            console.log("Botón de impresión presionado");
+                        
+            // Mostrar notificación no bloqueante en su lugar
+            showPrintNotification(true, 'Iniciando proceso de impresión...');
+            
+            // Iniciar impresión
+            printCollage();
+        });
+    }
+    
+    // Añadir animaciones CSS
+    const style = document.createElement('style');
+    style.textContent = `
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        @keyframes fadeOut {
+            from { opacity: 1; transform: translateY(0); }
+            to { opacity: 0; transform: translateY(20px); }
+        }
+    `;
+    document.head.appendChild(style);
+    
+    // Limpiar recursos al salir
+    window.addEventListener('beforeunload', function() {
+        if (mediaStream) {
+            mediaStream.getTracks().forEach(track => track.stop());
+        }
+    });
+});
+</script>
+{% endblock %}
