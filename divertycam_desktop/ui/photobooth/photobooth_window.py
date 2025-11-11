@@ -14,8 +14,9 @@ from PySide6.QtCore import Qt, QTimer, Signal, QSize
 from PySide6.QtGui import QPixmap, QImage, QFont
 
 import config
-from database import get_session, Evento, PhotoboothConfig, CollageSession, SessionPhoto
+from database import get_session, Evento, PhotoboothConfig, CollageSession, SessionPhoto, CollageResult, CollageTemplate
 from controllers import CameraManager
+from utils import CollageGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -244,20 +245,41 @@ class PhotoboothWindow(QMainWindow):
         try:
             # Crear sesión en la base de datos
             import uuid
+            from database.seed import get_or_create_default_template
+
             session_id = str(uuid.uuid4())
 
             with get_session() as db_session:
-                # Necesitamos el template_id (por ahora usar None o crear uno por defecto)
-                # TODO: Implementar selección de template
+                # Obtener o crear template predeterminado
                 template_id = self.config.plantilla_collage_id
 
                 if not template_id:
-                    QMessageBox.warning(
-                        self,
-                        "Advertencia",
-                        "No hay template configurado. Por favor configure un template primero."
-                    )
-                    return
+                    # No hay template configurado, crear uno predeterminado
+                    logger.info("No hay template configurado, creando uno predeterminado...")
+
+                    # Determinar número de fotos (puedes cambiar esto según necesites)
+                    max_photos = 4
+
+                    template_id = get_or_create_default_template(self.evento_id, max_photos)
+
+                    if not template_id:
+                        QMessageBox.critical(
+                            self,
+                            "Error",
+                            "No se pudo crear una plantilla de collage. Por favor contacte al administrador."
+                        )
+                        return
+
+                    # Actualizar config con el template creado
+                    photobooth_config = db_session.query(PhotoboothConfig).filter(
+                        PhotoboothConfig.evento_id == self.evento_id
+                    ).first()
+
+                    if photobooth_config:
+                        photobooth_config.plantilla_collage_id = template_id
+                        db_session.commit()
+                        self.config.plantilla_collage_id = template_id
+                        logger.info(f"Template predeterminado asignado: {template_id}")
 
                 self.session = CollageSession(
                     session_id=session_id,
@@ -282,7 +304,7 @@ class PhotoboothWindow(QMainWindow):
             logger.info(f"Sesión iniciada: {session_id}")
 
         except Exception as e:
-            logger.error(f"Error iniciando sesión: {e}")
+            logger.error(f"Error iniciando sesión: {e}", exc_info=True)
             QMessageBox.critical(self, "Error", f"Error iniciando sesión: {str(e)}")
 
     def capture_photo(self):
@@ -386,21 +408,126 @@ class PhotoboothWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Sesión Completada",
-                "¡Fotos capturadas correctamente!\n\nAhora generando collage..."
+                "¡Fotos capturadas correctamente!\n\nGenerando collage..."
             )
 
-            # TODO: Generar collage
-            # self.generate_collage()
+            # Generar collage
+            collage_path = self.generate_collage()
 
-            # Resetear para nueva sesión
-            self.reset_session()
+            if collage_path:
+                # Mostrar resultado
+                QMessageBox.information(
+                    self,
+                    "¡Listo!",
+                    f"¡Collage generado exitosamente!\n\nGuardado en:\n{collage_path}"
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Advertencia",
+                    "Las fotos se guardaron pero hubo un problema generando el collage."
+                )
 
             # Emitir señal
             self.session_completed.emit(self.session.session_id)
 
+            # Resetear para nueva sesión
+            self.reset_session()
+
         except Exception as e:
             logger.error(f"Error completando sesión: {e}")
             QMessageBox.critical(self, "Error", f"Error completando sesión: {str(e)}")
+
+    def generate_collage(self) -> Optional[Path]:
+        """
+        Genera el collage a partir de las fotos capturadas
+
+        Returns:
+            Path al collage generado, o None si hubo error
+        """
+        try:
+            import uuid
+            import json
+
+            logger.info("Iniciando generación de collage...")
+
+            # Obtener información de la sesión y plantilla
+            with get_session() as db_session:
+                # Obtener sesión con sus fotos
+                session = db_session.query(CollageSession).filter(
+                    CollageSession.session_id == self.session.session_id
+                ).first()
+
+                if not session:
+                    logger.error("Sesión no encontrada")
+                    return None
+
+                # Obtener plantilla
+                template_db = db_session.query(CollageTemplate).filter(
+                    CollageTemplate.template_id == session.template_id
+                ).first()
+
+                if not template_db:
+                    logger.error("Plantilla no encontrada")
+                    return None
+
+                # Convertir template_data de JSON a dict
+                template_data = template_db.template_data
+                if isinstance(template_data, str):
+                    template_data = json.loads(template_data)
+
+                # Obtener fotos ordenadas por frame_index
+                photos = db_session.query(SessionPhoto).filter(
+                    SessionPhoto.session_id == self.session.session_id
+                ).order_by(SessionPhoto.frame_index).all()
+
+                if not photos:
+                    logger.error("No hay fotos en la sesión")
+                    return None
+
+                # Obtener rutas de las imágenes
+                image_paths = [photo.image_path for photo in photos]
+
+                logger.info(f"Generando collage con {len(image_paths)} fotos")
+                logger.info(f"Plantilla: {template_data.get('nombre', 'Sin nombre')}")
+
+                # Crear generador de collage
+                generator = CollageGenerator(template_data)
+
+                # Definir ruta de salida
+                collage_id = str(uuid.uuid4())
+                output_filename = f"collage_{collage_id}.jpg"
+                output_path = config.COLLAGES_DIR / output_filename
+
+                # Generar collage
+                result_path = generator.generate(
+                    images=image_paths,
+                    output_path=output_path,
+                    add_border=True
+                )
+
+                if not result_path:
+                    logger.error("Error generando collage")
+                    return None
+
+                # Guardar resultado en la base de datos
+                collage_result = CollageResult(
+                    collage_id=collage_id,
+                    session_id=self.session.session_id,
+                    image_path=str(result_path),
+                    print_count=0,
+                    share_count=0
+                )
+
+                db_session.add(collage_result)
+                db_session.commit()
+
+                logger.info(f"Collage generado exitosamente: {result_path}")
+                return result_path
+
+        except Exception as e:
+            logger.error(f"Error generando collage: {e}", exc_info=True)
+            return None
 
     def cancel_session(self):
         """Cancela la sesión actual"""
