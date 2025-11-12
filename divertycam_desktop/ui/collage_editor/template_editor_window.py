@@ -18,6 +18,7 @@ import config
 from database import get_session, Evento, CollageTemplate
 from .collage_canvas import CollageCanvas, CollageCanvasView
 from .photo_frame_item import PhotoFrameItem
+from utils import copy_background_image, get_absolute_path
 
 logger = logging.getLogger(__name__)
 
@@ -452,6 +453,21 @@ class TemplateEditorWindow(QMainWindow):
             template_data['nombre'] = name
             template_data['descripcion'] = self.txt_description.toPlainText()
 
+            # Copiar imagen de fondo si existe
+            background_image_path = None
+            if self.canvas.background_image_path:
+                try:
+                    # Copiar imagen a la carpeta media/backgrounds
+                    background_image_path = copy_background_image(self.canvas.background_image_path)
+                    logger.info(f"Imagen de fondo copiada: {background_image_path}")
+                except Exception as e:
+                    logger.error(f"Error copiando imagen de fondo: {e}")
+                    QMessageBox.warning(
+                        self,
+                        "Advertencia",
+                        f"No se pudo copiar la imagen de fondo: {str(e)}\nLa plantilla se guardará sin imagen."
+                    )
+
             # Guardar en base de datos
             import uuid
             with get_session() as session:
@@ -465,6 +481,7 @@ class TemplateEditorWindow(QMainWindow):
                         template.nombre = name
                         template.descripcion = self.txt_description.toPlainText()
                         template.background_color = self.canvas.background_color.name()
+                        template.background_image = background_image_path  # Guardar ruta de imagen
                         template.template_data = json.dumps(template_data)
                 else:
                     # Crear nueva plantilla
@@ -474,6 +491,7 @@ class TemplateEditorWindow(QMainWindow):
                         nombre=name,
                         descripcion=self.txt_description.toPlainText(),
                         background_color=self.canvas.background_color.name(),
+                        background_image=background_image_path,  # Guardar ruta de imagen
                         template_data=json.dumps(template_data),
                         evento_id=self.evento_id,
                         es_predeterminada=False
@@ -518,6 +536,15 @@ class TemplateEditorWindow(QMainWindow):
                 color = QColor(template.background_color)
                 self.canvas.set_background_color(color)
                 self.btn_bg_color.setStyleSheet(f"background-color: {color.name()};")
+
+                # Cargar imagen de fondo si existe
+                if template.background_image:
+                    absolute_path = get_absolute_path(template.background_image)
+                    if absolute_path:
+                        self.canvas.set_background_image(str(absolute_path))
+                        logger.info(f"Imagen de fondo cargada: {absolute_path}")
+                    else:
+                        logger.warning(f"Imagen de fondo no encontrada: {template.background_image}")
 
                 # Cargar template_data
                 template_data = template.template_data

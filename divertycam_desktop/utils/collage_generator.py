@@ -10,6 +10,20 @@ from PIL import Image, ImageDraw, ImageOps
 logger = logging.getLogger(__name__)
 
 
+def get_absolute_path_from_relative(relative_path: str) -> Optional[Path]:
+    """Convierte una ruta relativa a absoluta desde el directorio del proyecto"""
+    if not relative_path:
+        return None
+    try:
+        # Obtener directorio del proyecto (3 niveles arriba desde utils)
+        project_root = Path(__file__).parent.parent
+        absolute_path = project_root / relative_path
+        return absolute_path if absolute_path.exists() else None
+    except Exception as e:
+        logger.error(f"Error convirtiendo ruta: {e}")
+        return None
+
+
 class CollageGenerator:
     """Generador de collages a partir de plantillas"""
 
@@ -84,8 +98,48 @@ class CollageGenerator:
         height = canvas_config["height"]
         bg_color = canvas_config["background_color"]
 
-        # Crear imagen con color de fondo
+        # Crear imagen base con color de fondo
         self.canvas = Image.new("RGB", (width, height), bg_color)
+
+        # Aplicar imagen de fondo si existe
+        background_image_path = canvas_config.get("background_image")
+        if background_image_path:
+            try:
+                # Convertir ruta relativa a absoluta
+                absolute_path = get_absolute_path_from_relative(background_image_path)
+
+                if absolute_path:
+                    # Cargar imagen de fondo
+                    bg_image = Image.open(absolute_path)
+
+                    # Escalar imagen para cubrir todo el canvas (modo cover)
+                    img_ratio = bg_image.width / bg_image.height
+                    canvas_ratio = width / height
+
+                    if img_ratio > canvas_ratio:
+                        # Imagen más ancha, ajustar por altura
+                        new_height = height
+                        new_width = int(height * img_ratio)
+                    else:
+                        # Imagen más alta, ajustar por ancho
+                        new_width = width
+                        new_height = int(width / img_ratio)
+
+                    bg_image = bg_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+                    # Centrar y recortar si es necesario
+                    x_offset = (new_width - width) // 2
+                    y_offset = (new_height - height) // 2
+                    bg_image = bg_image.crop((x_offset, y_offset, x_offset + width, y_offset + height))
+
+                    # Pegar sobre el canvas
+                    self.canvas.paste(bg_image, (0, 0))
+                    logger.info(f"Imagen de fondo aplicada: {absolute_path}")
+                else:
+                    logger.warning(f"Imagen de fondo no encontrada: {background_image_path}")
+            except Exception as e:
+                logger.error(f"Error aplicando imagen de fondo: {e}")
+
         logger.info(f"Canvas creado: {width}x{height}, color: {bg_color}")
 
     def _paste_image_in_frame(

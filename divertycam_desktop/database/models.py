@@ -114,6 +114,7 @@ class PhotoboothConfig(Base):
     velocidad_obturacion = Column(String(20), default='1/125')
     apertura = Column(String(10), default='f/5.6')
     iso_valor = Column(Integer, default=100)
+    balance_blancos = Column(String(20), default='auto')  # auto, daylight, cloudy, tungsten, fluorescent
     modo_disparo = Column(String(20), default='M')
     calidad_imagen = Column(String(20), default='JPEG_FINE')
     modo_enfoque = Column(String(20), default='AF-S')

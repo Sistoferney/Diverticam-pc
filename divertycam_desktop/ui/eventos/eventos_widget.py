@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt
 
 from database import get_session, Evento
 from .evento_dialog import EventoDialog
-from ..photobooth import PhotoboothWindow
+from ..photobooth import PhotoboothWindow, ConfigPhotoboothWindow
 from ..collage_editor import TemplateListWindow
 
 logger = logging.getLogger(__name__)
@@ -53,13 +53,19 @@ class EventosWidget(QWidget):
         toolbar.addSpacing(20)
 
         # Botón Editor de Plantillas
-        self.btn_editor = QPushButton("Editor de Plantillas")
+        self.btn_editor = QPushButton("🎨 Plantillas")
         self.btn_editor.clicked.connect(self.abrir_editor_plantillas)
         self.btn_editor.setEnabled(False)
         toolbar.addWidget(self.btn_editor)
 
+        # Botón Configurar Photobooth
+        self.btn_config_photobooth = QPushButton("⚙️ Configurar Photobooth")
+        self.btn_config_photobooth.clicked.connect(self.configurar_photobooth)
+        self.btn_config_photobooth.setEnabled(False)
+        toolbar.addWidget(self.btn_config_photobooth)
+
         # Botón Photobooth
-        self.btn_photobooth = QPushButton("Iniciar Photobooth")
+        self.btn_photobooth = QPushButton("📷 Iniciar Photobooth")
         self.btn_photobooth.clicked.connect(self.iniciar_photobooth)
         self.btn_photobooth.setEnabled(False)
         toolbar.addWidget(self.btn_photobooth)
@@ -157,6 +163,7 @@ class EventosWidget(QWidget):
         self.btn_editar.setEnabled(hay_seleccion)
         self.btn_eliminar.setEnabled(hay_seleccion)
         self.btn_editor.setEnabled(hay_seleccion)
+        self.btn_config_photobooth.setEnabled(hay_seleccion)
         self.btn_photobooth.setEnabled(hay_seleccion)
 
     def nuevo_evento(self):
@@ -298,3 +305,25 @@ class EventosWidget(QWidget):
         except Exception as e:
             logger.error(f"Error abriendo lista de plantillas: {e}")
             QMessageBox.critical(self, "Error", f"Error abriendo lista de plantillas:\n{str(e)}")
+
+    def configurar_photobooth(self):
+        """Abre la ventana de configuración del photobooth"""
+        selected_rows = self.tabla.selectedIndexes()
+        if not selected_rows:
+            QMessageBox.warning(self, "Aviso", "Por favor seleccione un evento")
+            return
+
+        row = selected_rows[0].row()
+        evento_id = int(self.tabla.item(row, 0).text())
+        evento_nombre = self.tabla.item(row, 1).text()
+
+        try:
+            # Abrir configuración de photobooth
+            self.config_window = ConfigPhotoboothWindow(evento_id, parent=self)
+            self.config_window.show()
+
+            logger.info(f"Configuración de photobooth abierta para evento: {evento_nombre}")
+
+        except Exception as e:
+            logger.error(f"Error abriendo configuración: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Error abriendo configuración:\n{str(e)}")

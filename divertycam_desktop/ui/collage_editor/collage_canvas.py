@@ -41,6 +41,7 @@ class CollageCanvas(QGraphicsScene):
         # Estilo del canvas
         self.background_color = QColor(255, 255, 255)
         self.background_image_item = None  # Item gráfico para la imagen de fondo
+        self.background_image_path = None  # Ruta de la imagen de fondo
         self.overlay_image = None
         self.overlay_opacity = 1.0
 
@@ -164,6 +165,9 @@ class CollageCanvas(QGraphicsScene):
             # Agregar a la escena
             self.addItem(self.background_image_item)
 
+            # Guardar la ruta de la imagen
+            self.background_image_path = image_path
+
         except Exception as e:
             print(f"Error cargando imagen de fondo: {e}")
             import traceback
@@ -174,6 +178,7 @@ class CollageCanvas(QGraphicsScene):
         if self.background_image_item:
             self.removeItem(self.background_image_item)
             self.background_image_item = None
+            self.background_image_path = None
 
     def get_template_data(self) -> dict:
         """Retorna los datos de la plantilla actual"""
@@ -182,13 +187,19 @@ class CollageCanvas(QGraphicsScene):
         for frame in self.frames:
             frames_data.append(frame.get_frame_data())
 
+        canvas_data = {
+            'width': int(self.width()),
+            'height': int(self.height()),
+            'background_color': self.background_color.name()
+        }
+
+        # Agregar imagen de fondo si existe (pero NO la incluimos en template_data,
+        # se guarda separadamente en el modelo CollageTemplate.background_image)
+        # El generador de collages obtendrá la ruta desde el modelo, no desde este JSON
+
         return {
             'num_photos': len(self.frames),
-            'canvas': {
-                'width': int(self.width()),
-                'height': int(self.height()),
-                'background_color': self.background_color.name()
-            },
+            'canvas': canvas_data,
             'frames': frames_data,
             'styling': {
                 'spacing': 20,

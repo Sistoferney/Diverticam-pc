@@ -46,20 +46,22 @@ class CameraManager:
 
         return cameras
 
-    def create_camera(self, camera_type: str, camera_index: int = 0) -> Optional[BaseCamera]:
+    def create_camera(self, camera_type: str, camera_index: int = 0, resolution: str = '1280x720', **kwargs) -> Optional[BaseCamera]:
         """
         Crea una instancia de cámara según el tipo
 
         Args:
             camera_type: Tipo de cámara ('webcam', 'nikon_dslr', etc.)
             camera_index: Índice de la cámara (para webcams)
+            resolution: Resolución de la cámara (ej: '1280x720', '1920x1080')
+            **kwargs: Parámetros adicionales específicos del tipo de cámara
 
         Returns:
             Instancia de BaseCamera o None si hay error
         """
         try:
             if camera_type == CameraType.WEBCAM.value:
-                return WebcamCamera(camera_index)
+                return WebcamCamera(camera_index, resolution=resolution)
 
             elif camera_type == CameraType.NIKON_DSLR.value:
                 # TODO: Implementar cuando esté listo
@@ -84,13 +86,15 @@ class CameraManager:
             logger.error(f"Error creando cámara {camera_type}: {e}")
             return None
 
-    def connect_camera(self, camera_type: str, camera_index: int = 0) -> bool:
+    def connect_camera(self, camera_type: str, camera_index: int = 0, resolution: str = '1280x720', **kwargs) -> bool:
         """
         Conecta con una cámara
 
         Args:
             camera_type: Tipo de cámara
             camera_index: Índice de la cámara
+            resolution: Resolución de la cámara
+            **kwargs: Parámetros adicionales
 
         Returns:
             True si la conexión fue exitosa
@@ -101,7 +105,7 @@ class CameraManager:
                 self.disconnect_camera()
 
             # Crear nueva cámara
-            camera = self.create_camera(camera_type, camera_index)
+            camera = self.create_camera(camera_type, camera_index, resolution=resolution, **kwargs)
 
             if not camera:
                 logger.error(f"No se pudo crear cámara {camera_type}")

@@ -45,6 +45,13 @@ def init_db():
     # Crear todas las tablas
     Base.metadata.create_all(bind=engine)
 
+    # Ejecutar migraciones automáticas
+    try:
+        from .migrate_add_balance_blancos import migrate_add_balance_blancos
+        migrate_add_balance_blancos()
+    except Exception as e:
+        logger.warning(f"Error ejecutando migraciones: {e}")
+
     logger.info(f"Base de datos inicializada: {DATABASE_URL}")
 
     return engine

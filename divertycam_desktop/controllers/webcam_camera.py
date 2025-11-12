@@ -15,14 +15,26 @@ logger = logging.getLogger(__name__)
 class WebcamCamera(BaseCamera):
     """Controlador para cámaras web estándar usando OpenCV"""
 
-    def __init__(self, camera_index=0):
+    def __init__(self, camera_index=0, resolution='1280x720'):
         super().__init__()
         self.camera_index = camera_index
         self.capture_device = None
+
+        # Parsear resolución
+        if isinstance(resolution, str) and 'x' in resolution:
+            width, height = resolution.split('x')
+            self.resolution_width = int(width)
+            self.resolution_height = int(height)
+        else:
+            # Valores por defecto
+            self.resolution_width = 1280
+            self.resolution_height = 720
+
         self.camera_info = {
             'type': 'webcam',
             'index': camera_index,
-            'name': f'Webcam {camera_index}'
+            'name': f'Webcam {camera_index}',
+            'resolution': f'{self.resolution_width}x{self.resolution_height}'
         }
 
     def connect(self) -> bool:
@@ -34,9 +46,10 @@ class WebcamCamera(BaseCamera):
                 logger.error(f"No se pudo abrir la webcam {self.camera_index}")
                 return False
 
-            # Configurar resolución por defecto
-            self.capture_device.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-            self.capture_device.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            # Configurar resolución
+            self.capture_device.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution_width)
+            self.capture_device.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution_height)
+            logger.info(f"Resolución configurada: {self.resolution_width}x{self.resolution_height}")
 
             # Leer frame de prueba
             ret, _ = self.capture_device.read()

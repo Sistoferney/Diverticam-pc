@@ -1,322 +1,583 @@
 """
-Ventana principal del Photobooth
+Ventana del Photobooth - Rediseño completo con flujo correcto
+
+Flujo:
+1. Pantalla de Bienvenida → "Iniciar Cámara"
+2. Pantalla de Cámara con preview → "¡TOMAR FOTOS!"
+3. Captura AUTOMÁTICA con intervalos
+4. Pantalla de Resultado con collage
 """
 import logging
+import uuid
 from pathlib import Path
 from typing import Optional, List
+from datetime import datetime
 from PIL import Image
 
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QMessageBox, QFrame
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QPushButton, QMessageBox, QStackedWidget
 )
-from PySide6.QtCore import Qt, QTimer, Signal, QSize
-from PySide6.QtGui import QPixmap, QImage, QFont
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QPixmap, QImage, QFont, QPalette, QBrush, QColor
 
 import config
 from database import get_session, Evento, PhotoboothConfig, CollageSession, SessionPhoto, CollageResult, CollageTemplate
 from controllers import CameraManager
-from utils import CollageGenerator
+from utils import CollageGenerator, get_absolute_path
 
 logger = logging.getLogger(__name__)
 
 
 class PhotoboothWindow(QMainWindow):
-    """Ventana fullscreen del Photobooth"""
-
-    # Señales
-    session_completed = Signal(str)  # Emite session_id cuando termina
+    """Ventana del Photobooth con flujo de 3 pantallas"""
 
     def __init__(self, evento_id: int, parent=None):
         super().__init__(parent)
 
         self.evento_id = evento_id
         self.evento: Optional[Evento] = None
-        self.config: Optional[PhotoboothConfig] = None
+        self.photobooth_config: Optional[PhotoboothConfig] = None
 
         # Cámara
         self.camera_manager = CameraManager()
+        self.camera = None
 
-        # Estado de la sesión
-        self.session: Optional[CollageSession] = None
+        # Datos de sesión
+        self.session_id = None
         self.captured_photos: List[Image.Image] = []
-        self.current_frame_index = 0
+        self.current_photo_index = 0
+        self.total_photos = 0
 
         # Timers
         self.preview_timer = QTimer()
-        self.preview_timer.timeout.connect(self.update_preview)
+        self.preview_timer.timeout.connect(self.update_camera_preview)
 
         self.countdown_timer = QTimer()
         self.countdown_timer.timeout.connect(self.update_countdown)
         self.countdown_value = 0
 
-        # Cargar configuración del evento
-        if not self.load_event_config():
+        # Cargar datos del evento
+        if not self.load_evento_data():
             QMessageBox.critical(self, "Error", "No se pudo cargar la configuración del evento")
             self.close()
             return
 
+        # Inicializar UI
         self.init_ui()
-        self.init_camera()
 
-    def load_event_config(self) -> bool:
-        """Carga la configuración del evento"""
+    def load_evento_data(self) -> bool:
+        """Carga los datos del evento y su configuración"""
         try:
             with get_session() as session:
-                self.evento = session.query(Evento).filter(Evento.id == self.evento_id).first()
+                from sqlalchemy.orm import joinedload
 
-                if not self.evento:
-                    logger.error(f"Evento {self.evento_id} no encontrado")
+                # Cargar evento con cliente
+                evento = session.query(Evento).options(
+                    joinedload(Evento.cliente)
+                ).filter(Evento.id == self.evento_id).first()
+
+                if not evento:
                     return False
 
-                self.config = self.evento.photobooth_config
+                # Guardar datos básicos
+                self.evento_nombre = evento.nombre
+                self.cliente_nombre = evento.cliente.nombre_completo if evento.cliente else "Sin cliente"
 
-                if not self.config:
-                    logger.error(f"No hay configuración de photobooth para evento {self.evento_id}")
-                    return False
+                # Cargar configuración de photobooth
+                pb_config = session.query(PhotoboothConfig).filter(
+                    PhotoboothConfig.evento_id == self.evento_id
+                ).first()
 
-                logger.info(f"Configuración cargada para evento: {self.evento.nombre}")
+                if not pb_config:
+                    # Crear configuración básica
+                    pb_config = PhotoboothConfig(evento_id=self.evento_id)
+                    session.add(pb_config)
+                    session.commit()
+                    session.refresh(pb_config)
+
+                # Guardar configuración
+                self.config_data = {
+                    'mensaje_bienvenida': pb_config.mensaje_bienvenida or f"¡Bienvenido a {self.evento_nombre}!",
+                    'color_texto': pb_config.color_texto or "#FFFFFF",
+                    'tamano_texto': pb_config.tamano_texto or 48,
+                    'imagen_fondo': pb_config.imagen_fondo,  # Agregar imagen de fondo
+                    'tiempo_cuenta_regresiva': pb_config.tiempo_cuenta_regresiva or 3,
+                    'tiempo_entre_fotos': pb_config.tiempo_entre_fotos or 3,
+                    'tiempo_visualizacion_foto': pb_config.tiempo_visualizacion_foto or 2,
+                    'plantilla_collage_id': pb_config.plantilla_collage_id,
+                    'resolucion_camara': pb_config.resolucion_camara or '1280x720'
+                }
+
                 return True
 
         except Exception as e:
-            logger.error(f"Error cargando configuración: {e}")
+            logger.error(f"Error cargando datos del evento: {e}", exc_info=True)
             return False
 
     def init_ui(self):
-        """Inicializa la interfaz de usuario"""
-        self.setWindowTitle(f"Photobooth - {self.evento.nombre}")
+        """Inicializa la interfaz con 3 pantallas"""
+        self.setWindowTitle(f"Photobooth - {self.evento_nombre}")
+        self.showFullScreen()
 
-        # Widget central
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        # Widget central con stack
+        self.stack = QStackedWidget()
+        self.setCentralWidget(self.stack)
 
+        # Crear las 3 pantallas
+        self.create_welcome_screen()
+        self.create_camera_screen()
+        self.create_result_screen()
+
+        # Mostrar pantalla de bienvenida
+        self.stack.setCurrentIndex(0)
+
+    def create_welcome_screen(self):
+        """Crea la pantalla de bienvenida con imagen de fondo opcional"""
+        # Contenedor principal
+        welcome = QWidget()
+        welcome.setStyleSheet("background-color: #2b2278;")  # Color de respaldo
+
+        # Intentar cargar imagen de fondo
+        background_pixmap = None
+        if self.config_data.get('imagen_fondo'):
+            try:
+                # Obtener ruta absoluta desde la ruta relativa guardada
+                img_path = get_absolute_path(self.config_data['imagen_fondo'])
+                if img_path:
+                    background_pixmap = QPixmap(str(img_path))
+                    logger.info(f"Imagen de fondo cargada: {img_path}")
+                else:
+                    logger.warning(f"Imagen de fondo no encontrada: {self.config_data['imagen_fondo']}")
+            except Exception as e:
+                logger.error(f"Error cargando imagen de fondo: {e}")
+
+        # Si hay imagen, crear label de fondo con tamaño completo
+        if background_pixmap:
+            self.welcome_background_label = QLabel(welcome)
+            self.welcome_background_label.setScaledContents(False)
+            self.welcome_background_label.setAlignment(Qt.AlignCenter)
+
+            # Escalar pixmap para cubrir toda la pantalla (modo cover)
+            screen_size = self.screen().size()
+            pixmap_size = background_pixmap.size()
+            scale_x = screen_size.width() / pixmap_size.width()
+            scale_y = screen_size.height() / pixmap_size.height()
+            scale = max(scale_x, scale_y)
+
+            scaled_pixmap = background_pixmap.scaled(
+                int(pixmap_size.width() * scale),
+                int(pixmap_size.height() * scale),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+
+            self.welcome_background_label.setPixmap(scaled_pixmap)
+            self.welcome_background_label.setGeometry(0, 0, screen_size.width(), screen_size.height())
+            self.welcome_background_label.lower()
+        else:
+            self.welcome_background_label = None
+
+        # Layout principal del widget welcome
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        welcome.setLayout(main_layout)
+
+        # Widget contenedor transparente para el contenido (encima del fondo)
+        content_widget = QWidget()
+        content_widget.setStyleSheet("background-color: transparent;")
         layout = QVBoxLayout()
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(20)
+        layout.setContentsMargins(0, 0, 0, 0)
+        content_widget.setLayout(layout)
+
+        main_layout.addWidget(content_widget)
+
+        layout.addStretch()
 
         # Mensaje de bienvenida
-        self.welcome_label = QLabel(self.config.mensaje_bienvenida)
-        self.welcome_label.setAlignment(Qt.AlignCenter)
+        welcome_label = QLabel(self.config_data['mensaje_bienvenida'])
+        welcome_label.setAlignment(Qt.AlignCenter)
+        welcome_label.setWordWrap(True)
+
         font = QFont()
-        font.setPointSize(24)
+        font.setPointSize(self.config_data['tamano_texto'])
         font.setBold(True)
-        self.welcome_label.setFont(font)
-        self.welcome_label.setStyleSheet(f"color: {self.config.color_texto};")
-        layout.addWidget(self.welcome_label)
+        welcome_label.setFont(font)
 
-        # Preview de la cámara
-        self.preview_label = QLabel()
-        self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setMinimumSize(QSize(800, 600))
-        self.preview_label.setStyleSheet("background-color: black; border: 2px solid white;")
-        self.preview_label.setScaledContents(False)
-        layout.addWidget(self.preview_label)
+        welcome_label.setStyleSheet(f"color: {self.config_data['color_texto']}; padding: 40px; background-color: transparent;")
+        layout.addWidget(welcome_label)
 
-        # Label de cuenta regresiva (superpuesto al preview)
-        self.countdown_label = QLabel("", self.preview_label)
-        self.countdown_label.setAlignment(Qt.AlignCenter)
-        self.countdown_label.setGeometry(0, 0, 800, 600)
-        font_countdown = QFont()
-        font_countdown.setPointSize(120)
-        font_countdown.setBold(True)
-        self.countdown_label.setFont(font_countdown)
-        self.countdown_label.setStyleSheet("color: white; background: transparent;")
-        self.countdown_label.hide()
+        # Subtítulo
+        subtitle = QLabel("¡Captura tu mejor momento y llévate un recuerdo inolvidable!")
+        subtitle.setAlignment(Qt.AlignCenter)
+        subtitle.setWordWrap(True)
+        subtitle.setStyleSheet("color: #FFFFFF; font-size: 24px; padding: 20px; background-color: transparent;")
+        layout.addWidget(subtitle)
 
-        # Indicador de progreso (fotos capturadas)
-        self.progress_label = QLabel()
+        layout.addStretch()
+
+        # Botón iniciar cámara
+        self.btn_start_camera = QPushButton("📷 Iniciar Cámara")
+        self.btn_start_camera.setMinimumSize(300, 80)
+        self.btn_start_camera.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                font-size: 28px;
+                font-weight: bold;
+                border-radius: 15px;
+                padding: 20px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        """)
+        self.btn_start_camera.clicked.connect(self.start_camera)
+
+        button_container = QHBoxLayout()
+        button_container.addStretch()
+        button_container.addWidget(self.btn_start_camera)
+        button_container.addStretch()
+        layout.addLayout(button_container)
+
+        layout.addStretch()
+
+        # Botón cerrar (esquina superior derecha)
+        close_btn = QPushButton("❌ Cerrar")
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(0, 0, 0, 0.5);
+                color: white;
+                font-size: 16px;
+                border-radius: 5px;
+                padding: 10px 20px;
+            }
+        """)
+        close_btn.clicked.connect(self.close)
+
+        top_bar = QHBoxLayout()
+        top_bar.addStretch()
+        top_bar.addWidget(close_btn)
+        layout.insertLayout(0, top_bar)
+
+        self.stack.addWidget(welcome)
+
+    def create_camera_screen(self):
+        """Crea la pantalla de cámara con preview"""
+        camera = QWidget()
+        layout = QVBoxLayout()
+        camera.setLayout(layout)
+
+        # Fondo negro
+        camera.setAutoFillBackground(True)
+        palette = camera.palette()
+        palette.setColor(QPalette.Window, Qt.black)
+        camera.setPalette(palette)
+
+        # Vista previa de la cámara
+        self.camera_preview_label = QLabel()
+        self.camera_preview_label.setAlignment(Qt.AlignCenter)
+        self.camera_preview_label.setMinimumSize(800, 600)
+        self.camera_preview_label.setStyleSheet("border: 3px solid #4CAF50;")
+        self.camera_preview_label.setScaledContents(False)
+        layout.addWidget(self.camera_preview_label, 1)
+
+        # Indicador de progreso
+        self.progress_label = QLabel("0 / 0 fotos")
         self.progress_label.setAlignment(Qt.AlignCenter)
-        font_progress = QFont()
-        font_progress.setPointSize(16)
-        self.progress_label.setFont(font_progress)
+        self.progress_label.setStyleSheet("color: white; font-size: 24px; padding: 10px;")
         layout.addWidget(self.progress_label)
-        self.update_progress_label()
+
+        # Instrucciones
+        self.instruction_label = QLabel()
+        self.instruction_label.setAlignment(Qt.AlignCenter)
+        self.instruction_label.setStyleSheet("color: white; font-size: 20px; padding: 10px;")
+        layout.addWidget(self.instruction_label)
+
+        # Botón iniciar sesión
+        self.btn_start_session = QPushButton("📸 ¡TOMAR FOTOS!")
+        self.btn_start_session.setMinimumSize(300, 80)
+        self.btn_start_session.setStyleSheet("""
+            QPushButton {
+                background-color: #f44336;
+                color: white;
+                font-size: 32px;
+                font-weight: bold;
+                border-radius: 15px;
+                padding: 20px;
+            }
+            QPushButton:hover {
+                background-color: #da190b;
+            }
+            QPushButton:disabled {
+                background-color: #999;
+            }
+        """)
+        self.btn_start_session.clicked.connect(self.start_photo_session)
+
+        button_container = QHBoxLayout()
+        button_container.addStretch()
+        button_container.addWidget(self.btn_start_session)
+        button_container.addStretch()
+        layout.addLayout(button_container)
+
+        # Overlay de cuenta regresiva
+        self.countdown_label = QLabel()
+        self.countdown_label.setAlignment(Qt.AlignCenter)
+        self.countdown_label.setStyleSheet("""
+            color: #f44336;
+            font-size: 120px;
+            font-weight: bold;
+            background-color: rgba(0, 0, 0, 0.7);
+            border-radius: 20px;
+            padding: 40px;
+        """)
+        self.countdown_label.setVisible(False)
+
+        # Posicionar overlay en el centro
+        self.countdown_label.setParent(camera)
+        self.countdown_label.setGeometry(0, 0, 0, 0)  # Se ajustará dinámicamente
+
+        self.stack.addWidget(camera)
+
+    def create_result_screen(self):
+        """Crea la pantalla de resultado"""
+        result = QWidget()
+        layout = QVBoxLayout()
+        result.setLayout(layout)
+
+        # Fondo
+        result.setAutoFillBackground(True)
+        palette = result.palette()
+        palette.setColor(QPalette.Window, QColor("#2b2278"))
+        result.setPalette(palette)
+
+        # Título
+        title = QLabel("¡Tu recuerdo está listo!")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("color: white; font-size: 36px; font-weight: bold; padding: 20px;")
+        layout.addWidget(title)
+
+        # Imagen del collage
+        self.collage_image_label = QLabel()
+        self.collage_image_label.setAlignment(Qt.AlignCenter)
+        self.collage_image_label.setScaledContents(False)
+        layout.addWidget(self.collage_image_label, 1)
 
         # Botones
         buttons_layout = QHBoxLayout()
-        buttons_layout.setSpacing(20)
 
-        self.btn_start = QPushButton("Iniciar Sesión")
-        self.btn_start.setMinimumSize(QSize(200, 60))
-        self.btn_start.setStyleSheet("font-size: 18px; font-weight: bold;")
-        self.btn_start.clicked.connect(self.start_session)
-        buttons_layout.addWidget(self.btn_start)
+        self.btn_new_session = QPushButton("🔄 Nueva Sesión")
+        self.btn_new_session.setMinimumSize(200, 60)
+        self.btn_new_session.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                font-size: 20px;
+                font-weight: bold;
+                border-radius: 10px;
+                padding: 15px;
+            }
+        """)
+        self.btn_new_session.clicked.connect(self.restart_session)
+        buttons_layout.addWidget(self.btn_new_session)
 
-        self.btn_capture = QPushButton("Tomar Foto")
-        self.btn_capture.setMinimumSize(QSize(200, 60))
-        self.btn_capture.setStyleSheet("font-size: 18px; font-weight: bold;")
-        self.btn_capture.clicked.connect(self.capture_photo)
-        self.btn_capture.setEnabled(False)
-        buttons_layout.addWidget(self.btn_capture)
+        self.btn_print = QPushButton("🖨 Imprimir")
+        self.btn_print.setMinimumSize(200, 60)
+        self.btn_print.setStyleSheet("""
+            QPushButton {
+                background-color: #9C27B0;
+                color: white;
+                font-size: 20px;
+                font-weight: bold;
+                border-radius: 10px;
+                padding: 15px;
+            }
+        """)
+        self.btn_print.clicked.connect(self.print_collage)
+        buttons_layout.addWidget(self.btn_print)
 
-        self.btn_cancel = QPushButton("Cancelar")
-        self.btn_cancel.setMinimumSize(QSize(150, 60))
-        self.btn_cancel.setStyleSheet("font-size: 18px;")
-        self.btn_cancel.clicked.connect(self.cancel_session)
-        self.btn_cancel.setEnabled(False)
-        buttons_layout.addWidget(self.btn_cancel)
-
-        self.btn_exit = QPushButton("Salir")
-        self.btn_exit.setMinimumSize(QSize(150, 60))
-        self.btn_exit.setStyleSheet("font-size: 18px;")
-        self.btn_exit.clicked.connect(self.close)
-        buttons_layout.addWidget(self.btn_exit)
+        self.btn_close_result = QPushButton("❌ Volver a Eventos")
+        self.btn_close_result.setMinimumSize(200, 60)
+        self.btn_close_result.setStyleSheet("""
+            QPushButton {
+                background-color: #757575;
+                color: white;
+                font-size: 20px;
+                font-weight: bold;
+                border-radius: 10px;
+                padding: 15px;
+            }
+        """)
+        self.btn_close_result.clicked.connect(self.return_to_events)
+        buttons_layout.addWidget(self.btn_close_result)
 
         layout.addLayout(buttons_layout)
 
-        central_widget.setLayout(layout)
+        self.stack.addWidget(result)
 
-        # Configurar ventana
-        self.resize(1024, 768)
-        # self.showFullScreen()  # Descomentar para modo fullscreen
-
-    def init_camera(self):
-        """Inicializa la cámara"""
+    def start_camera(self):
+        """Inicia la cámara y muestra la pantalla de cámara"""
         try:
-            camera_type = self.config.tipo_camara or 'webcam'
-            camera_index = 0  # TODO: Obtener del config
+            # Inicializar cámara
+            resolution = self.config_data['resolucion_camara']
+            self.camera = self.camera_manager.create_camera('webcam', resolution=resolution)
 
-            if self.camera_manager.connect_camera(camera_type, camera_index):
-                logger.info("Cámara conectada correctamente")
-                self.start_preview()
-            else:
-                logger.error("Error conectando con la cámara")
-                QMessageBox.warning(
-                    self,
-                    "Advertencia",
-                    "No se pudo conectar con la cámara. Algunas funciones no estarán disponibles."
-                )
+            if not self.camera.connect():
+                QMessageBox.critical(self, "Error", "No se pudo conectar a la cámara")
+                return
 
-        except Exception as e:
-            logger.error(f"Error inicializando cámara: {e}")
+            # Cambiar a pantalla de cámara
+            self.stack.setCurrentIndex(1)
 
-    def start_preview(self):
-        """Inicia el preview de la cámara"""
-        self.preview_timer.start(33)  # ~30 FPS
-
-    def stop_preview(self):
-        """Detiene el preview de la cámara"""
-        self.preview_timer.stop()
-
-    def update_preview(self):
-        """Actualiza el frame del preview"""
-        try:
-            image = self.camera_manager.get_preview()
-
-            if image:
-                # Convertir PIL Image a QPixmap
-                pixmap = self.pil_image_to_qpixmap(image)
-
-                # Escalar manteniendo aspecto
-                scaled_pixmap = pixmap.scaled(
-                    self.preview_label.size(),
-                    Qt.KeepAspectRatio,
-                    Qt.SmoothTransformation
-                )
-
-                self.preview_label.setPixmap(scaled_pixmap)
-
-        except Exception as e:
-            logger.error(f"Error actualizando preview: {e}")
-
-    @staticmethod
-    def pil_image_to_qpixmap(pil_image: Image.Image) -> QPixmap:
-        """Convierte una imagen PIL a QPixmap"""
-        # Convertir a RGB si es necesario
-        if pil_image.mode != 'RGB':
-            pil_image = pil_image.convert('RGB')
-
-        # Convertir a bytes
-        image_bytes = pil_image.tobytes('raw', 'RGB')
-
-        # Crear QImage
-        qimage = QImage(
-            image_bytes,
-            pil_image.width,
-            pil_image.height,
-            pil_image.width * 3,
-            QImage.Format_RGB888
-        )
-
-        return QPixmap.fromImage(qimage)
-
-    def start_session(self):
-        """Inicia una nueva sesión de fotos"""
-        try:
             # Crear sesión en la base de datos
-            import uuid
+            if not self.create_session():
+                QMessageBox.critical(self, "Error", "No se pudo crear la sesión")
+                return
+
+            # Iniciar preview
+            self.preview_timer.start(33)  # ~30 FPS
+
+            # Actualizar instrucciones
+            self.update_instructions()
+
+            logger.info("Cámara iniciada correctamente")
+
+        except Exception as e:
+            logger.error(f"Error iniciando cámara: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Error iniciando cámara: {str(e)}")
+
+    def create_session(self) -> bool:
+        """Crea una nueva sesión de collage en la base de datos"""
+        try:
             from database.seed import get_or_create_default_template
 
-            session_id = str(uuid.uuid4())
+            # Obtener plantilla
+            template_id = self.config_data['plantilla_collage_id']
 
-            with get_session() as db_session:
-                # Obtener o crear template predeterminado
-                template_id = self.config.plantilla_collage_id
+            if not template_id:
+                # Crear plantilla predeterminada
+                template_id = get_or_create_default_template(self.evento_id, 4)
 
                 if not template_id:
-                    # No hay template configurado, crear uno predeterminado
-                    logger.info("No hay template configurado, creando uno predeterminado...")
+                    logger.error("No se pudo crear plantilla predeterminada")
+                    return False
 
-                    # Determinar número de fotos (puedes cambiar esto según necesites)
-                    max_photos = 4
+            # Obtener número de fotos de la plantilla
+            with get_session() as session:
+                import json
 
-                    template_id = get_or_create_default_template(self.evento_id, max_photos)
+                template = session.query(CollageTemplate).filter(
+                    CollageTemplate.template_id == template_id
+                ).first()
 
-                    if not template_id:
-                        QMessageBox.critical(
-                            self,
-                            "Error",
-                            "No se pudo crear una plantilla de collage. Por favor contacte al administrador."
-                        )
-                        return
+                if not template:
+                    logger.error("Plantilla no encontrada")
+                    return False
 
-                    # Actualizar config con el template creado
-                    photobooth_config = db_session.query(PhotoboothConfig).filter(
-                        PhotoboothConfig.evento_id == self.evento_id
-                    ).first()
+                template_data = template.template_data
+                if isinstance(template_data, str):
+                    template_data = json.loads(template_data)
 
-                    if photobooth_config:
-                        photobooth_config.plantilla_collage_id = template_id
-                        db_session.commit()
-                        self.config.plantilla_collage_id = template_id
-                        logger.info(f"Template predeterminado asignado: {template_id}")
+                self.total_photos = template_data.get('num_photos', 4)
 
-                self.session = CollageSession(
-                    session_id=session_id,
+                # Crear sesión
+                self.session_id = str(uuid.uuid4())
+
+                collage_session = CollageSession(
+                    session_id=self.session_id,
                     template_id=template_id,
                     evento_id=self.evento_id,
                     status='active'
                 )
 
-                db_session.add(self.session)
-                db_session.commit()
+                session.add(collage_session)
+                session.commit()
 
-            # Resetear estado
-            self.captured_photos = []
-            self.current_frame_index = 0
+                logger.info(f"Sesión creada: {self.session_id}, {self.total_photos} fotos")
 
             # Actualizar UI
-            self.btn_start.setEnabled(False)
-            self.btn_capture.setEnabled(True)
-            self.btn_cancel.setEnabled(True)
-            self.update_progress_label()
+            self.current_photo_index = 0
+            self.captured_photos = []
+            self.update_progress()
 
-            logger.info(f"Sesión iniciada: {session_id}")
+            return True
 
         except Exception as e:
-            logger.error(f"Error iniciando sesión: {e}", exc_info=True)
-            QMessageBox.critical(self, "Error", f"Error iniciando sesión: {str(e)}")
+            logger.error(f"Error creando sesión: {e}", exc_info=True)
+            return False
 
-    def capture_photo(self):
-        """Captura una foto con cuenta regresiva"""
-        self.btn_capture.setEnabled(False)
+    def update_camera_preview(self):
+        """Actualiza el preview de la cámara"""
+        try:
+            if not self.camera:
+                return
 
-        # Iniciar cuenta regresiva
-        self.countdown_value = self.config.tiempo_cuenta_regresiva
+            preview = self.camera.get_preview()
+            if preview:
+                # Convertir PIL Image a QPixmap
+                preview_rgb = preview.convert('RGB')
+                data = preview_rgb.tobytes("raw", "RGB")
+                qimage = QImage(data, preview_rgb.width, preview_rgb.height, QImage.Format_RGB888)
+                pixmap = QPixmap.fromImage(qimage)
+
+                # Escalar manteniendo proporción
+                scaled_pixmap = pixmap.scaled(
+                    self.camera_preview_label.size(),
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation
+                )
+
+                self.camera_preview_label.setPixmap(scaled_pixmap)
+
+        except Exception as e:
+            logger.error(f"Error actualizando preview: {e}")
+
+    def update_instructions(self):
+        """Actualiza las instrucciones mostradas"""
+        instruction_text = (
+            f"Se tomarán {self.total_photos} fotos con "
+            f"{self.config_data['tiempo_entre_fotos']} segundos entre cada una"
+        )
+        self.instruction_label.setText(instruction_text)
+
+    def update_progress(self):
+        """Actualiza el indicador de progreso"""
+        self.progress_label.setText(f"{len(self.captured_photos)} / {self.total_photos} fotos")
+
+    def start_photo_session(self):
+        """Inicia la captura automática de fotos"""
+        try:
+            self.btn_start_session.setEnabled(False)
+            self.btn_start_session.setText("📸 Tomando fotos...")
+
+            # Iniciar cuenta regresiva para la primera foto
+            self.start_countdown()
+
+        except Exception as e:
+            logger.error(f"Error iniciando sesión de fotos: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Error: {str(e)}")
+
+    def start_countdown(self):
+        """Inicia la cuenta regresiva antes de tomar una foto"""
+        self.countdown_value = self.config_data['tiempo_cuenta_regresiva']
         self.countdown_label.setText(str(self.countdown_value))
-        self.countdown_label.show()
 
-        self.countdown_timer.start(1000)  # 1 segundo
+        # Centrar y mostrar overlay
+        self.center_countdown_overlay()
+        self.countdown_label.setVisible(True)
+
+        self.countdown_timer.start(1000)
+
+    def center_countdown_overlay(self):
+        """Centra el overlay de cuenta regresiva"""
+        parent_size = self.stack.currentWidget().size()
+        overlay_size = self.countdown_label.sizeHint()
+
+        x = (parent_size.width() - 300) // 2
+        y = (parent_size.height() - 200) // 2
+
+        self.countdown_label.setGeometry(x, y, 300, 200)
 
     def update_countdown(self):
         """Actualiza la cuenta regresiva"""
@@ -324,182 +585,217 @@ class PhotoboothWindow(QMainWindow):
 
         if self.countdown_value > 0:
             self.countdown_label.setText(str(self.countdown_value))
+        elif self.countdown_value == 0:
+            self.countdown_label.setText("¡Sonríe!")
         else:
-            # Cuenta regresiva terminada, capturar
+            # Terminar countdown y capturar
             self.countdown_timer.stop()
-            self.countdown_label.hide()
-            self.perform_capture()
+            self.countdown_label.setVisible(False)
 
-    def perform_capture(self):
-        """Realiza la captura de la foto"""
+            # Capturar foto
+            QTimer.singleShot(500, self.capture_photo)
+
+    def capture_photo(self):
+        """Captura una foto"""
         try:
-            # Capturar imagen
-            image = self.camera_manager.capture_image()
-
-            if not image:
-                QMessageBox.warning(self, "Error", "No se pudo capturar la imagen")
-                self.btn_capture.setEnabled(True)
+            if not self.camera:
+                logger.error("Cámara no disponible")
                 return
 
-            # Guardar imagen
-            save_path = config.PHOTOS_DIR / f"session_{self.session.session_id}_frame_{self.current_frame_index}.jpg"
-            image.save(save_path, "JPEG", quality=95)
+            # Capturar imagen
+            photo = self.camera.capture()
 
-            # Guardar en base de datos
-            with get_session() as db_session:
-                photo = SessionPhoto(
-                    session_id=self.session.session_id,
-                    frame_index=self.current_frame_index,
-                    image_path=str(save_path)
-                )
-                db_session.add(photo)
-                db_session.commit()
+            if not photo:
+                logger.error("No se pudo capturar la foto")
+                QMessageBox.warning(self, "Error", "No se pudo capturar la foto")
+                self.btn_start_session.setEnabled(True)
+                self.btn_start_session.setText("📸 ¡TOMAR FOTOS!")
+                return
 
-            # Agregar a lista local
-            self.captured_photos.append(image)
-            self.current_frame_index += 1
+            # Guardar foto
+            self.captured_photos.append(photo)
 
-            # Actualizar UI
-            self.update_progress_label()
+            # Guardar en la base de datos
+            self.save_photo_to_db(photo)
 
-            # Verificar si completamos todas las fotos
-            max_photos = 4  # TODO: Obtener del template
-            if self.current_frame_index >= max_photos:
-                self.complete_session()
+            # Actualizar progreso
+            self.update_progress()
+
+            logger.info(f"Foto {len(self.captured_photos)}/{self.total_photos} capturada exitosamente")
+
+            # Intentar mostrar foto capturada durante tiempo_visualizacion_foto
+            try:
+                self.show_captured_photo(photo)
+            except Exception as e:
+                logger.error(f"Error mostrando foto: {e}", exc_info=True)
+
+            # SIEMPRE continuar con el flujo, independiente de errores en visualización
+            # Verificar si terminamos
+            if len(self.captured_photos) >= self.total_photos:
+                # Todas las fotos capturadas - esperar tiempo de visualización + continuar
+                wait_time = self.config_data['tiempo_visualizacion_foto'] * 1000
+                logger.info(f"Sesión completa. Esperando {wait_time}ms antes de generar collage")
+                QTimer.singleShot(wait_time, self.finish_session)
             else:
-                # Esperar un momento y habilitar siguiente captura
-                QTimer.singleShot(self.config.tiempo_entre_fotos * 1000, self.enable_next_capture)
+                # Esperar tiempo de visualización + tiempo entre fotos antes de la siguiente
+                tiempo_vis = self.config_data['tiempo_visualizacion_foto']
+                tiempo_entre = self.config_data['tiempo_entre_fotos']
+                total_wait = (tiempo_vis + tiempo_entre) * 1000
+                logger.info(f"Esperando {tiempo_vis}s (visualización) + {tiempo_entre}s (entre fotos) = {total_wait}ms antes de siguiente foto")
+                QTimer.singleShot(total_wait, self.continue_to_next_photo)
 
         except Exception as e:
-            logger.error(f"Error capturando foto: {e}")
+            logger.error(f"Error capturando foto: {e}", exc_info=True)
             QMessageBox.critical(self, "Error", f"Error capturando foto: {str(e)}")
-            self.btn_capture.setEnabled(True)
 
-    def enable_next_capture(self):
-        """Habilita el botón para la siguiente captura"""
-        self.btn_capture.setEnabled(True)
-
-    def update_progress_label(self):
-        """Actualiza el label de progreso"""
-        if self.session:
-            max_photos = 4  # TODO: Obtener del template
-            self.progress_label.setText(f"Fotos capturadas: {len(self.captured_photos)} / {max_photos}")
-        else:
-            self.progress_label.setText("")
-
-    def complete_session(self):
-        """Completa la sesión y genera el collage"""
+    def show_captured_photo(self, photo: Image.Image):
+        """Muestra la foto capturada temporalmente"""
+        # VERSIÓN SIMPLIFICADA - Solo detener preview temporalmente
         try:
-            # Actualizar sesión en la base de datos
-            from datetime import datetime
-            with get_session() as db_session:
-                session = db_session.query(CollageSession).filter(
-                    CollageSession.session_id == self.session.session_id
+            # Detener el preview de cámara temporalmente
+            self.preview_timer.stop()
+
+            # Ocultar countdown
+            self.countdown_label.setVisible(False)
+
+            # TODO: Implementar visualización correcta de la foto
+            # Por ahora solo mostramos un mensaje en el label del progreso
+            self.progress_label.setText(f"✓ Foto {len(self.captured_photos)}/{self.total_photos} capturada")
+
+            logger.info(f"Foto {len(self.captured_photos)} capturada. Esperando antes de continuar...")
+
+        except Exception as e:
+            logger.error(f"Error en show_captured_photo: {e}", exc_info=True)
+
+    def continue_to_next_photo(self):
+        """Continúa con la siguiente foto después de mostrar la capturada"""
+        try:
+            # Limpiar el preview label
+            self.camera_preview_label.clear()
+
+            # Actualizar el progreso de nuevo
+            self.update_progress()
+
+            # Reanudar preview de cámara
+            self.preview_timer.start(30)  # 30ms = ~33 fps
+
+            logger.info("Reanudando preview para siguiente foto")
+
+            # Comenzar countdown para la siguiente foto
+            self.start_countdown()
+
+        except Exception as e:
+            logger.error(f"Error continuando a siguiente foto: {e}", exc_info=True)
+
+    def save_photo_to_db(self, photo: Image.Image):
+        """Guarda la foto en la base de datos"""
+        try:
+            # Crear directorio si no existe
+            photos_dir = config.PHOTOS_DIR / self.session_id
+            photos_dir.mkdir(parents=True, exist_ok=True)
+
+            # Guardar imagen
+            photo_filename = f"photo_{len(self.captured_photos)}.jpg"
+            photo_path = photos_dir / photo_filename
+            photo.save(photo_path, "JPEG", quality=95)
+
+            # Guardar en BD
+            with get_session() as session:
+                session_photo = SessionPhoto(
+                    session_id=self.session_id,
+                    frame_index=len(self.captured_photos) - 1,
+                    image_path=str(photo_path)
+                )
+
+                session.add(session_photo)
+                session.commit()
+
+                logger.info(f"Foto guardada: {photo_path}")
+
+        except Exception as e:
+            logger.error(f"Error guardando foto en DB: {e}", exc_info=True)
+
+    def finish_session(self):
+        """Finaliza la sesión y genera el collage"""
+        try:
+            # Detener preview
+            self.preview_timer.stop()
+
+            # Actualizar sesión en BD
+            with get_session() as session:
+                collage_session = session.query(CollageSession).filter(
+                    CollageSession.session_id == self.session_id
                 ).first()
 
-                if session:
-                    session.status = 'completed'
-                    session.completed_at = datetime.now()
-                    db_session.commit()
+                if collage_session:
+                    collage_session.status = 'completed'
+                    collage_session.completed_at = datetime.now()
+                    session.commit()
 
-            logger.info(f"Sesión completada: {self.session.session_id}")
-
-            # Mostrar mensaje
-            QMessageBox.information(
-                self,
-                "Sesión Completada",
-                "¡Fotos capturadas correctamente!\n\nGenerando collage..."
-            )
+            logger.info("Sesión completada, generando collage...")
 
             # Generar collage
             collage_path = self.generate_collage()
 
             if collage_path:
                 # Mostrar resultado
-                QMessageBox.information(
-                    self,
-                    "¡Listo!",
-                    f"¡Collage generado exitosamente!\n\nGuardado en:\n{collage_path}"
-                )
+                self.show_result(collage_path)
             else:
-                QMessageBox.warning(
-                    self,
-                    "Advertencia",
-                    "Las fotos se guardaron pero hubo un problema generando el collage."
-                )
-
-            # Emitir señal
-            self.session_completed.emit(self.session.session_id)
-
-            # Resetear para nueva sesión
-            self.reset_session()
+                QMessageBox.warning(self, "Advertencia", "Hubo un problema generando el collage")
+                self.restart_session()
 
         except Exception as e:
-            logger.error(f"Error completando sesión: {e}")
-            QMessageBox.critical(self, "Error", f"Error completando sesión: {str(e)}")
+            logger.error(f"Error finalizando sesión: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Error: {str(e)}")
 
     def generate_collage(self) -> Optional[Path]:
-        """
-        Genera el collage a partir de las fotos capturadas
-
-        Returns:
-            Path al collage generado, o None si hubo error
-        """
+        """Genera el collage"""
         try:
-            import uuid
             import json
 
-            logger.info("Iniciando generación de collage...")
-
-            # Obtener información de la sesión y plantilla
-            with get_session() as db_session:
-                # Obtener sesión con sus fotos
-                session = db_session.query(CollageSession).filter(
-                    CollageSession.session_id == self.session.session_id
+            with get_session() as session:
+                # Obtener sesión y plantilla
+                collage_session = session.query(CollageSession).filter(
+                    CollageSession.session_id == self.session_id
                 ).first()
 
-                if not session:
-                    logger.error("Sesión no encontrada")
+                if not collage_session:
                     return None
 
-                # Obtener plantilla
-                template_db = db_session.query(CollageTemplate).filter(
-                    CollageTemplate.template_id == session.template_id
+                template_db = session.query(CollageTemplate).filter(
+                    CollageTemplate.template_id == collage_session.template_id
                 ).first()
 
                 if not template_db:
-                    logger.error("Plantilla no encontrada")
                     return None
 
-                # Convertir template_data de JSON a dict
+                # Obtener template data
                 template_data = template_db.template_data
                 if isinstance(template_data, str):
                     template_data = json.loads(template_data)
 
-                # Obtener fotos ordenadas por frame_index
-                photos = db_session.query(SessionPhoto).filter(
-                    SessionPhoto.session_id == self.session.session_id
+                # Agregar imagen de fondo al template_data desde el modelo
+                if template_db.background_image:
+                    template_data['canvas']['background_image'] = template_db.background_image
+                    logger.info(f"Imagen de fondo agregada al collage: {template_db.background_image}")
+
+                # Obtener fotos
+                photos = session.query(SessionPhoto).filter(
+                    SessionPhoto.session_id == self.session_id
                 ).order_by(SessionPhoto.frame_index).all()
 
                 if not photos:
-                    logger.error("No hay fotos en la sesión")
                     return None
 
-                # Obtener rutas de las imágenes
                 image_paths = [photo.image_path for photo in photos]
 
-                logger.info(f"Generando collage con {len(image_paths)} fotos")
-                logger.info(f"Plantilla: {template_data.get('nombre', 'Sin nombre')}")
-
-                # Crear generador de collage
+                # Generar collage
                 generator = CollageGenerator(template_data)
 
-                # Definir ruta de salida
                 collage_id = str(uuid.uuid4())
                 output_filename = f"collage_{collage_id}.jpg"
                 output_path = config.COLLAGES_DIR / output_filename
 
-                # Generar collage
                 result_path = generator.generate(
                     images=image_paths,
                     output_path=output_path,
@@ -507,68 +803,91 @@ class PhotoboothWindow(QMainWindow):
                 )
 
                 if not result_path:
-                    logger.error("Error generando collage")
                     return None
 
-                # Guardar resultado en la base de datos
+                # Guardar en BD
                 collage_result = CollageResult(
                     collage_id=collage_id,
-                    session_id=self.session.session_id,
+                    session_id=self.session_id,
                     image_path=str(result_path),
                     print_count=0,
                     share_count=0
                 )
 
-                db_session.add(collage_result)
-                db_session.commit()
+                session.add(collage_result)
+                session.commit()
 
-                logger.info(f"Collage generado exitosamente: {result_path}")
+                logger.info(f"Collage generado: {result_path}")
                 return result_path
 
         except Exception as e:
             logger.error(f"Error generando collage: {e}", exc_info=True)
             return None
 
-    def cancel_session(self):
-        """Cancela la sesión actual"""
-        reply = QMessageBox.question(
+    def show_result(self, collage_path: Path):
+        """Muestra la pantalla de resultado con el collage"""
+        try:
+            # Cargar imagen del collage
+            pixmap = QPixmap(str(collage_path))
+
+            # Escalar manteniendo proporción
+            scaled_pixmap = pixmap.scaled(
+                1200, 800,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+
+            self.collage_image_label.setPixmap(scaled_pixmap)
+
+            # Guardar path para imprimir
+            self.current_collage_path = collage_path
+
+            # Cambiar a pantalla de resultado
+            self.stack.setCurrentIndex(2)
+
+        except Exception as e:
+            logger.error(f"Error mostrando resultado: {e}", exc_info=True)
+
+    def restart_session(self):
+        """Reinicia para una nueva sesión"""
+        # Limpiar datos
+        self.session_id = None
+        self.captured_photos = []
+        self.current_photo_index = 0
+        self.current_collage_path = None
+
+        # Volver a pantalla de bienvenida
+        self.stack.setCurrentIndex(0)
+
+        # Detener cámara si está activa
+        if self.camera:
+            self.camera.disconnect()
+            self.camera = None
+
+        # Detener preview
+        self.preview_timer.stop()
+
+    def print_collage(self):
+        """Imprime el collage (placeholder)"""
+        QMessageBox.information(
             self,
-            "Cancelar Sesión",
-            "¿Está seguro que desea cancelar la sesión actual?\n\nSe perderán las fotos capturadas.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            "Imprimir",
+            "Función de impresión pendiente de implementar"
         )
 
-        if reply == QMessageBox.Yes:
-            try:
-                # Actualizar sesión en la base de datos
-                with get_session() as db_session:
-                    session = db_session.query(CollageSession).filter(
-                        CollageSession.session_id == self.session.session_id
-                    ).first()
+    def return_to_events(self):
+        """Regresa a la lista de eventos (cierra la ventana de photobooth)"""
+        # Limpiar recursos
+        if self.camera:
+            self.camera.disconnect()
+            self.camera = None
 
-                    if session:
-                        session.status = 'canceled'
-                        db_session.commit()
+        # Detener timers
+        self.preview_timer.stop()
+        self.countdown_timer.stop()
 
-                logger.info(f"Sesión cancelada: {self.session.session_id}")
-
-                self.reset_session()
-
-            except Exception as e:
-                logger.error(f"Error cancelando sesión: {e}")
-
-    def reset_session(self):
-        """Resetea el estado para una nueva sesión"""
-        self.session = None
-        self.captured_photos = []
-        self.current_frame_index = 0
-
-        self.btn_start.setEnabled(True)
-        self.btn_capture.setEnabled(False)
-        self.btn_cancel.setEnabled(False)
-
-        self.update_progress_label()
+        # Cerrar ventana
+        self.close()
 
     def closeEvent(self, event):
         """Maneja el cierre de la ventana"""
@@ -576,8 +895,8 @@ class PhotoboothWindow(QMainWindow):
         self.preview_timer.stop()
         self.countdown_timer.stop()
 
-        # Desconectar cámara
-        self.camera_manager.cleanup()
+        # Cerrar cámara
+        if self.camera:
+            self.camera.disconnect()
 
-        logger.info("Photobooth cerrado")
         event.accept()
